@@ -30,10 +30,12 @@ def package(environment, output):
         subprocess.run(project + ["-t", "mergebin"], cwd=ROOT, check=True)
         sources = {"application.bin": "firmware.bin", "full-flash.bin": "firmware-merged.bin"}
     else:
-        if not (build / "firmware.uf2").is_file():
+        hex_image = build / "firmware.hex"
+        uf2_image = build / "firmware.uf2"
+        if not uf2_image.is_file() or hex_image.stat().st_mtime_ns > uf2_image.stat().st_mtime_ns:
             subprocess.run(
-                [sys.executable, str(ROOT / "bin/uf2conv/uf2conv.py"), str(build / "firmware.hex"),
-                 "-c", "-f", "0xADA52840", "-o", str(build / "firmware.uf2")],
+                [sys.executable, str(ROOT / "bin/uf2conv/uf2conv.py"), str(hex_image),
+                 "-c", "-f", "0xADA52840", "-o", str(uf2_image)],
                 cwd=ROOT, check=True,
             )
         sources = {"dfu.zip": "firmware.zip", "uf2": "firmware.uf2"}
