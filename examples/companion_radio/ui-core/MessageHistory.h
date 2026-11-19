@@ -49,6 +49,23 @@ inline void capturePath(uint8_t& dest_len, uint8_t* dest_path, const uint8_t* sr
   dest_len = ((hash_size - 1) << 6) | hash_count;
 }
 
+#ifdef ZYGIS_KIT_UX
+inline uint64_t kitConversationId(const uint8_t* key, size_t size) {
+  uint8_t hash[32];
+  mesh::Utils::sha256(hash, sizeof(hash), key, size);
+  uint64_t id;
+  memcpy(&id, hash, sizeof(id));
+  // A channel and a direct conversation have different key sizes; the packed
+  // archive stores them in separate streams as well.
+  return id ? id : 1;
+}
+
+struct MessageSignal {
+  int16_t rssi = 0;
+  int8_t snrQuarterDb = 0;
+};
+#endif
+
 struct ChHistEntry {
   uint8_t  ch_idx;
   char     text[MSG_TEXT_BUF];
@@ -62,6 +79,13 @@ struct ChHistEntry {
   // path_len packs (hash_size-1)<<6|hop_count, same as mesh::Packet::path_len.
   uint8_t  path_len;
   uint8_t  path[MAX_HIST_PATH_BYTES];
+#ifdef ZYGIS_KIT_UX
+  MessageSignal signal;
+  uint64_t conversation = 0;
+  bool incomingUnread = false;
+  bool archiveRequested = false;
+  uint32_t archiveChannelKey = 0;
+#endif
 #ifdef HIST_ARCHIVE
   uint32_t arc_id;         // record id in the conversation's archive file (HistArchive)
 #endif
@@ -86,6 +110,11 @@ struct DmHistEntry {
   // repeater-echo concept), so this stays unset (0) for outgoing entries.
   uint8_t  path_len;
   uint8_t  path[MAX_HIST_PATH_BYTES];
+#ifdef ZYGIS_KIT_UX
+  MessageSignal signal;
+  uint64_t conversation = 0;
+  bool incomingUnread = false;
+#endif
 #ifdef HIST_ARCHIVE
   uint32_t arc_id;
 #endif
@@ -158,7 +187,11 @@ public:
   // message could bump the very badge it's supposed to leave alone.
   int addChannelMsg(uint8_t ch_idx, const char* text, bool viewing, uint32_t timestamp = 0,
                      const uint8_t* path = nullptr, uint8_t path_len_packed = 0,
-                     bool own_message = false) {
+                     bool own_message = false
+#ifdef ZYGIS_KIT_UX
+                     , MessageSignal signal = {}
+#endif
+                     ) {
     // Guard against bogus channel indices (e.g. findChannelIdx() returned -1
     // and was cast to uint8_t → 255). Storing such an entry would burn a ring
     // slot for a message that no visible channel can ever surface.
@@ -187,6 +220,10 @@ public:
       _hist_head = (_hist_head + 1) % CH_HIST_MAX;
     }
     _hist[pos].ch_idx = ch_idx;
+#ifdef ZYGIS_KIT_UX
+    _hist[pos].signal = signal;
+    _hist[pos].incomingUnread = !viewing && !own_message;
+#endif
     _hist[pos].timestamp = displayTimestamp(timestamp, own_message);
     strncpy(_hist[pos].text, text, sizeof(_hist[pos].text) - 1);
     _hist[pos].text[sizeof(_hist[pos].text) - 1] = '\0';
@@ -366,7 +403,11 @@ public:
   void storeDMMsg(const uint8_t* pub_key, bool outgoing, const char* text,
                   uint32_t ack_tag = 0, uint32_t ack_deadline_ms = 0,
                   uint32_t msg_ts = 0, uint8_t resends = 0,
-                  const uint8_t* path = nullptr, uint8_t path_len_packed = 0) {
+                  const uint8_t* path = nullptr, uint8_t path_len_packed = 0
+#ifdef ZYGIS_KIT_UX
+                  , MessageSignal signal = {}
+#endif
+                  ) {
     int pos;
     if (_dm_hist_count < DM_HIST_MAX) {
       pos = (_dm_hist_head + _dm_hist_count) % DM_HIST_MAX;
@@ -377,6 +418,11 @@ public:
     }
     memcpy(_dm_hist[pos].prefix, pub_key, 4);
     _dm_hist[pos].outgoing = outgoing ? 1 : 0;
+#ifdef ZYGIS_KIT_UX
+    _dm_hist[pos].signal = signal;
+    _dm_hist[pos].conversation = kitConversationId(pub_key, PUB_KEY_SIZE);
+    _dm_hist[pos].incomingUnread = !outgoing;
+#endif
     // Prefer the sender's own timestamp — a room-sync replay or an
     // offline-queued message held by a repeater can arrive long after it was
     // actually sent, so "now" would mislabel every backlog message as fresh.
@@ -405,7 +451,11 @@ public:
   void addDMMsg(const uint8_t* pub_key, bool outgoing, const char* text,
                 uint32_t sender_timestamp = 0, uint32_t ack_tag = 0,
                 uint32_t ack_deadline_ms = 0, uint8_t resends = 0,
-                const uint8_t* path = nullptr, uint8_t path_len_packed = 0) {
+                const uint8_t* path = nullptr, uint8_t path_len_packed = 0
+#ifdef ZYGIS_KIT_UX
+                  , MessageSignal signal = {}
+#endif
+                  ) {
     // Drop retried copies of an incoming DM: a resend reuses the sender's
     // timestamp and text but carries a fresh packet hash, so the mesh dup-filter
     // lets it through. Match on prefix + sender_timestamp + text to suppress it.
@@ -417,7 +467,11 @@ public:
           return;  // duplicate retry — already in history
       }
     }
-    storeDMMsg(pub_key, outgoing, text, ack_tag, ack_deadline_ms, sender_timestamp, resends, path, path_len_packed);
+    storeDMMsg(pub_key, outgoing, text, ack_tag, ack_deadline_ms, sender_timestamp, resends, path, path_len_packed
+#ifdef ZYGIS_KIT_UX
+               , signal
+#endif
+               );
   }
 
   int dmHistCountForContact(const uint8_t* prefix) const {
@@ -602,6 +656,40 @@ public:
     if (_dm_hist[pos].ack_status == ACK_PENDING) _dm_hist[pos].ack_status = ACK_NONE;
     _dm_hist[pos].resends_left = 0;
     _dm_hist[pos].ack_tag = 0;
+  }
+#endif
+
+#ifdef ZYGIS_KIT_UX
+  bool eraseKitMessage(bool channel, uint32_t id) {
+    if (!id) return false;
+    if (channel) {
+      for (int i = 0; i < _hist_count; ++i) {
+        const ChHistEntry& e = _hist[(_hist_head + i) % CH_HIST_MAX];
+        if (e.arc_id != id) continue;
+        const uint8_t slot = e.ch_idx;
+        if (strncmp(e.text, "Me: ", 4) != 0 && _ch_unread[slot]) {
+          int newer = 0;
+          for (int j = i + 1; j < _hist_count; ++j) {
+            const ChHistEntry& later = _hist[(_hist_head + j) % CH_HIST_MAX];
+            if (later.ch_idx == slot && strncmp(later.text, "Me: ", 4) != 0) ++newer;
+          }
+          if (newer < _ch_unread[slot]) setChUnread(slot, _ch_unread[slot] - 1);
+        }
+        for (int j = i; j + 1 < _hist_count; ++j)
+          _hist[(_hist_head + j) % CH_HIST_MAX] = _hist[(_hist_head + j + 1) % CH_HIST_MAX];
+        --_hist_count;
+        return true;
+      }
+    } else {
+      for (int i = 0; i < _dm_hist_count; ++i) {
+        if (_dm_hist[(_dm_hist_head + i) % DM_HIST_MAX].arc_id != id) continue;
+        for (int j = i; j + 1 < _dm_hist_count; ++j)
+          _dm_hist[(_dm_hist_head + j) % DM_HIST_MAX] = _dm_hist[(_dm_hist_head + j + 1) % DM_HIST_MAX];
+        --_dm_hist_count;
+        return true;
+      }
+    }
+    return false;
   }
 #endif
 

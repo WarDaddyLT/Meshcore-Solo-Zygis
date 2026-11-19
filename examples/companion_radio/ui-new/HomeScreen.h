@@ -1,4 +1,7 @@
 #pragma once
+#ifdef ZYGIS_KIT_UX
+#include "KitCarouselIcons.h"
+#endif
 // Included into UITask.cpp only (see the note on screen fragments there).
 // Home: the clock, favourites, status, Bluetooth ... pages, and the lock screen.
 
@@ -130,6 +133,11 @@ class HomeScreen : public UIScreen {
 
   // Selected slot on the Favourites page (0..FAVOURITES_COUNT - 1).
   uint8_t _fav_sel = 0;
+#ifdef ZYGIS_KIT_UX
+  bool _kitCarousel = true;
+  bool _kitAdvertReview = false;
+  uint8_t _kitSelected = 0;    // Messages, then the existing Solo page order.
+#endif
 
   // Slot payload (pubkey prefix, or channel index in byte 0 — see the slot's
   // kind), or nullptr when the slot is empty.
@@ -431,6 +439,12 @@ class HomeScreen : public UIScreen {
     return mq;
   }
 
+  void sendManualAdvert() {
+    _task->notify(UIEventType::ack);
+    if (the_mesh.advert()) _advert_sent_ms = millis();
+    else _task->showAlert("Advert failed", 1000);
+  }
+
   void quickAct(int page, const QRow& r) {
     switch (r.act) {
       case QA_NONE: break;
@@ -445,9 +459,12 @@ class HomeScreen : public UIScreen {
         if (_task->isBluetoothEnabled()) _task->disableBluetooth(); else _task->enableBluetooth();
         break;
       case QA_ADVERT:
-        _task->notify(UIEventType::ack);
-        if (the_mesh.advert()) _advert_sent_ms = millis();   // the row says so
-        else _task->showAlert("Advert failed", 1000);
+#ifdef ZYGIS_KIT_UX
+        _kitAdvertReview = true;
+        _tile_menu.beginConfirm("Send identity advert?", "Send advert");
+#else
+        sendManualAdvert();
+#endif
         break;
       case QA_TOOL: ToolsScreen::run(_task, (ToolsScreen::Action)r.n, true); break;
       case QA_LOCK: _task->lockScreen(); break;
@@ -1346,7 +1363,171 @@ public:
     return nullptr;
   }
 
+  void renderTopStatus(DisplayDriver& display, bool isLocked) {
+    display.setColor(UIColor::primary_txt);
+    // The lock page has nothing on the left of the bar (its clock sits
+    // below it), so the status icons may use the whole row.
+    const int lock_reserve = isLocked ? 0 : -1;
+    int rightEdge = renderBatteryIndicator(display, _task->getBattMilliVolts(), lock_reserve);
+    display.setColor(UIColor::primary_txt);
+
+    if (!isLocked) {
+      const int bar_ty = (statusBarH(display) - display.getLineHeight()) / 2;   // text centred in a tall bar (STATUS_ICON_SCALE)
+      // The time, once the clock is set (the node name before that): the
+      // name is what others see, the time is what you glance at here.
+      char filtered_name[sizeof(_node_prefs->node_name)];
+      uint32_t now_ts = _rtc->getCurrentTime();
+      if (now_ts >= 1000000000UL) {
+        struct tm lt;
+        localTm(now_ts, tzHoursAt(_node_prefs, now_ts), lt);
+        int hh = lt.tm_hour;
+        if (_node_prefs->clock_12h) { hh %= 12; if (hh == 0) hh = 12; }
+        snprintf(filtered_name, sizeof(filtered_name), "%d:%02d", hh, lt.tm_min);
+        if (display.width() >= 40 * display.getCharWidth())   // the 4.2": the date beside it
+          snprintf(filtered_name + strlen(filtered_name), sizeof(filtered_name) - strlen(filtered_name),
+                   "  %s %d %s", WDAY[lt.tm_wday], lt.tm_mday, MON[lt.tm_mon]);
+      } else {
+        display.translateUTF8ToBlocks(filtered_name, _node_prefs->node_name, sizeof(filtered_name));
+      }
+
+      // Only show the live-power readout when APC is actually controlling power —
+      // not merely when the pref is set. While repeating APC is suppressed and
+      // power is pinned to the ceiling, so apcActive() is false and the name bar
+      // drops the readout (matching the "--" lock in Settings).
+      if (the_mesh.apcActive()) {
+        char pwr_buf[8];
+        snprintf(pwr_buf, sizeof(pwr_buf), "%ddB", (int)radio_driver.getTxPower());
+        int pwr_w = display.getTextWidth(pwr_buf);
+        display.drawTextEllipsized(0, bar_ty, rightEdge - 2 - pwr_w - 2, filtered_name);
+        display.drawTextRightAlign(rightEdge - 2, bar_ty, pwr_buf);
+      } else {
+        display.drawTextEllipsized(0, bar_ty, rightEdge - 2, filtered_name);
+      }
+    }
+  }
+
+#ifdef ZYGIS_KIT_UX
+  void onShow() override {
+    _kitCarousel = true;
+    if (_kitAdvertReview) _tile_menu.active = false;
+    _kitAdvertReview = false;
+  }
+
+  static const char* kitPageLabel(int page) {
+    switch (page) {
+      case CLOCK: return "Clock";
+      case FAVOURITES: return "Favourites";
+      case STATUS: return "Status";
+      case BLUETOOTH: return "Bluetooth";
+      case ADVERT: return "Advert";
+      case SETTINGS: return "Settings";
+      case MAP: return "Map";
+      case TOOLS: return "Tools";
+      case QUICK_MSG: return "Quick messages";
+      case SHUTDOWN: return "Power";
+      default: return "Messages";
+    }
+  }
+
+  // The reference draws in a 128x128 space. These transforms reproduce
+  // the AIDAS9 GxEPD driver on the kit's native 192x176 panel.
+  static constexpr int kitX(int x) { return x * 3 / 2; }
+  static constexpr int kitY(int y) { return y * 11 / 8; }
+
+  static void drawKitMenuBitmap(DisplayDriver& d, int x, int y, const uint8_t* bits, int size) {
+    const int bx = kitX(x), by = kitY(y);
+    const int stride = size / 8;
+    for (int row = 0; row < size; ++row) {
+      int top = kitY(row), height = kitY(row + 1) - top;
+      for (int col = 0; col < size;) {
+        if (!(bits[row * stride + col / 8] & (0x80 >> (col % 8)))) { ++col; continue; }
+        const int start = col++;
+        while (col < size && (bits[row * stride + col / 8] & (0x80 >> (col % 8)))) ++col;
+        d.fillRect(bx + kitX(start), by + top, kitX(col) - kitX(start), height);
+      }
+    }
+  }
+
+  void drawKitMenuIcon(DisplayDriver& d, int page, int x, int y, int size) {
+    const uint8_t* native = nullptr;
+    switch (page) {
+      case -1:
+      case QUICK_MSG: native = size == 48 ? kitIcon_message_48 : kitIcon_message_32; break;
+      case STATUS: native = size == 48 ? kitIcon_radio_48 : kitIcon_radio_32; break;
+      case ADVERT: native = size == 48 ? kitIcon_advert_48 : kitIcon_advert_32; break;
+      case SETTINGS: native = size == 48 ? kitIcon_settings_48 : kitIcon_settings_32; break;
+      case CLOCK: native = size == 48 ? kitIcon_clock_48 : kitIcon_clock_32; break;
+      case FAVOURITES: native = size == 48 ? kitIcon_favourites_48 : kitIcon_favourites_32; break;
+      case BLUETOOTH: native = size == 48 ? kitIcon_bluetooth_48 : kitIcon_bluetooth_32; break;
+      case MAP: native = size == 48 ? kitIcon_map_48 : kitIcon_map_32; break;
+      case TOOLS: native = size == 48 ? kitIcon_tools_48 : kitIcon_tools_32; break;
+      case SHUTDOWN: native = size == 48 ? kitIcon_power_48 : kitIcon_power_32; break;
+    }
+    if (native) drawKitMenuBitmap(d, x, y, native, size);
+  }
+
+
+  int renderKitCarousel(DisplayDriver& d) {
+    int order[Count];
+    const int count = buildVisibleOrder(order) + 1;
+    if (_kitSelected >= count) _kitSelected = 0;
+    const int page = _kitSelected ? order[_kitSelected - 1] : -1;
+    d.setTextSize(1);
+    d.setColor(UIColor::primary_txt);
+    renderTopStatus(d, false);
+    d.setColor(UIColor::primary_txt);
+
+    const int unread = _task->getDMUnreadTotal() + _task->getChannelUnreadCount() + _task->getRoomUnreadCount();
+    char badge[16];
+    snprintf(badge, sizeof(badge), "MSG:%d", unread);
+    d.drawTextEllipsized(0, 27, d.width() - d.getTextWidth(badge) - 8, _node_prefs->node_name);
+    d.drawTextRightAlign(d.width() - 2, 27, badge);
+    const int before = (_kitSelected + count - 1) % count;
+    const int after = (_kitSelected + 1) % count;
+    drawKitMenuIcon(d, before ? order[before - 1] : -1, 3, 72, 32);
+    drawKitMenuIcon(d, after ? order[after - 1] : -1, 93, 72, 32);
+
+    d.setColor(UIColor::window_bkg);
+    d.fillRect(kitX(23), kitY(43), kitX(82), kitY(82));
+    d.setColor(UIColor::primary_txt);
+    d.drawRect(kitX(23), kitY(43), kitX(82), kitY(82));
+    d.drawTextCentered(kitX(64), kitY(58) - d.getLineHeight() + 2, kitPageLabel(page));
+    d.drawRect(kitX(27), kitY(64), kitX(74), kitY(1));
+    drawKitMenuIcon(d, page, 40, 70, 48);
+    return 1000;
+  }
+
+  bool kitCarouselInput(char c) {
+    if (!_kitCarousel || _page == LOCK) {
+      if (c == KEY_CANCEL && !_tile_menu.active && !_quick_edit && _page != LOCK) {
+        _kitCarousel = true;
+        return true;
+      }
+      return false;
+    }
+    int order[Count];
+    const int count = buildVisibleOrder(order) + 1;
+    if (_kitSelected >= count) _kitSelected = 0;
+    if (uint8_t(c) == KEY_UP || uint8_t(c) == KEY_DOWN) {
+      _kitSelected = (_kitSelected + (uint8_t(c) == KEY_UP ? count - 1 : 1)) % count;
+    } else if (c == KEY_ENTER || c == KEY_SELECT) {
+      if (!_kitSelected) _task->gotoMessagesScreen();
+      else {
+        _page = order[_kitSelected - 1];
+        _quick_sel = 0;
+        _kitCarousel = false;
+      }
+    } else if (uint8_t(c) == KEY_CONTEXT_MENU && !_kitSelected) {
+      _task->gotoMessagesScreen();
+    }
+    return true;
+  }
+#endif
+
   int render(DisplayDriver& display) override {
+#ifdef ZYGIS_KIT_UX
+    if (_kitCarousel && _page != LOCK) return renderKitCarousel(display);
+#endif
     // Ensure current page is visible (after a settings change, or at the start
     // with the Clock hidden). First: the title bar below goes by the page.
     if (!isPageVisible(_page)) _page = navPage(_page, +1);
@@ -1365,50 +1546,7 @@ public:
     const int content_y = contentTop(display);    // first content row, below the icons
     const float slide   = slideProgress();        // -1, or how far a page turn has got
 
-    // Title bar displaying node name (except on lock screen), status icons and battery.
-    // Hidden on fullscreen pages (CLOCK).
-    if (_page != CLOCK) {
-      display.setColor(UIColor::primary_txt);
-      // The lock page has nothing on the left of the bar (its clock sits
-      // below it), so the status icons may use the whole row.
-      const int lock_reserve = _page == LOCK ? 0 : -1;
-      int rightEdge = renderBatteryIndicator(display, _task->getBattMilliVolts(), lock_reserve);
-      display.setColor(UIColor::primary_txt);
-
-      if (_page != LOCK) {
-        const int bar_ty = (statusBarH(display) - lh) / 2;   // text centred in a tall bar (STATUS_ICON_SCALE)
-        // The time, once the clock is set (the node name before that): the
-        // name is what others see, the time is what you glance at here.
-        char filtered_name[sizeof(_node_prefs->node_name)];
-        uint32_t now_ts = _rtc->getCurrentTime();
-        if (now_ts >= 1000000000UL) {
-          struct tm lt;
-          localTm(now_ts, tzHoursAt(_node_prefs, now_ts), lt);
-          int hh = lt.tm_hour;
-          if (_node_prefs->clock_12h) { hh %= 12; if (hh == 0) hh = 12; }
-          snprintf(filtered_name, sizeof(filtered_name), "%d:%02d", hh, lt.tm_min);
-          if (display.width() >= 40 * display.getCharWidth())   // the 4.2": the date beside it
-            snprintf(filtered_name + strlen(filtered_name), sizeof(filtered_name) - strlen(filtered_name),
-                     "  %s %d %s", WDAY[lt.tm_wday], lt.tm_mday, MON[lt.tm_mon]);
-        } else {
-          display.translateUTF8ToBlocks(filtered_name, _node_prefs->node_name, sizeof(filtered_name));
-        }
-
-        // Only show the live-power readout when APC is actually controlling power —
-        // not merely when the pref is set. While repeating APC is suppressed and
-        // power is pinned to the ceiling, so apcActive() is false and the name bar
-        // drops the readout (matching the "--" lock in Settings).
-        if (the_mesh.apcActive()) {
-          char pwr_buf[8];
-          snprintf(pwr_buf, sizeof(pwr_buf), "%ddB", (int)radio_driver.getTxPower());
-          int pwr_w = display.getTextWidth(pwr_buf);
-          display.drawTextEllipsized(0, bar_ty, rightEdge - 2 - pwr_w - 2, filtered_name);
-          display.drawTextRightAlign(rightEdge - 2, bar_ty, pwr_buf);
-        } else {
-          display.drawTextEllipsized(0, bar_ty, rightEdge - 2, filtered_name);
-        }
-      }
-    }
+    if (_page != CLOCK) renderTopStatus(display, _page == LOCK);
 
     // curr page indicator — a row of small page icons, one per visible page, with
     // the current page underlined. Hidden on CLOCK and LOCK (full screen used for
@@ -1655,6 +1793,9 @@ public:
       display.setTextSize(1);
       display.drawTextCentered(display.width() / 2, content_y + step, "hibernating...");   // the panel's Hibernate row
     }
+#ifdef ZYGIS_KIT_UX
+    if (_kitAdvertReview) _tile_menu.render(display);
+#endif
     if (_page == HomePage::MAP && _tile_menu.active) _tile_menu.render(display);   // "GPS is off"
     if (slide >= 0) {   // page turn: the page left behind slides out, this one in
       display.slideCompose(_slide_dir * (int)(display.width() * slide + 0.5f));
@@ -1690,6 +1831,16 @@ public:
   uint8_t editMode() override { return isQuickPage(_page) && _quick_edit ? EDIT_VALUE : EDIT_NONE; }
 
   bool handleInput(char c) override {
+#ifdef ZYGIS_KIT_UX
+    if (_kitAdvertReview) {
+      auto result = _tile_menu.handleInput(c);
+      if (result == PopupMenu::SELECTED && _tile_menu.selectedIndex() == 0) sendManualAdvert();
+      if (result != PopupMenu::NONE) _kitAdvertReview = false;
+      return true;
+    }
+    if (uint8_t(c) == KEY_HOME) { _kitCarousel = true; return true; }
+    if (kitCarouselInput(c)) return true;
+#endif
     // One button: a double click is back a page (Home has nowhere else to go back to).
     if (c == KEY_CANCEL && _task->oneButtonUi() && !_tile_menu.active && !_quick_edit) { turnPage(-1); return true; }
     // Map page: "GPS is off" before a share (the tile menu, free on this page).

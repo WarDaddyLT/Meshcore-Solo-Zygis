@@ -55,12 +55,21 @@ static void aw_set_brightness(uint16_t value) {
   aw_write(AW21009_REG_UPDATE, 0x00);                // latch
 }
 
+static bool backlightOn = false;
+
+void techoKeyshieldSetBacklight(bool enabled) {
+  if (enabled == backlightOn) return;
+  static bool initialized = false;
+  if (!initialized) {
+    aw_init();
+    initialized = true;
+  }
+  backlightOn = enabled;
+  aw_set_brightness(enabled ? AW21009_ON_LEVEL : 0);
+}
+
 void techo_keyshield_backlight_toggle() {
-  static bool inited = false;
-  static bool on = false;
-  if (!inited) { aw_init(); inited = true; }
-  on = !on;
-  aw_set_brightness(on ? AW21009_ON_LEVEL : 0);
+  techoKeyshieldSetBacklight(!backlightOn);
 }
 
 #endif

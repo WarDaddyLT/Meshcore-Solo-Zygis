@@ -117,18 +117,13 @@ def _u16le(buf, off):
     return buf[off] | (buf[off + 1] << 8)
 
 
-def _expected_buffer_size(width, height, display_type):
+def _expected_buffer_size(width, height, display_type, rotation=0):
     """Bytes the firmware should send for given dims+type."""
     if display_type == DISPLAY_TYPE_RGB565:
         return width * height * 2
     if display_type == DISPLAY_TYPE_EINK:
-        # GxEPD2 buffer is in physical panel coordinates: row-major,
-        # stride = ceil(WIDTH_VISIBLE / 8) bytes, HEIGHT rows.
-        # WIDTH_VISIBLE = shorter visible dim regardless of rotation.
-        visible_short = min(width, height)
-        phys_stride   = (visible_short + 7) // 8
-        phys_height   = max(width, height)
-        return phys_stride * phys_height
+        physical_w, physical_h = (height, width) if rotation & 1 else (width, height)
+        return ((physical_w + 7) // 8) * physical_h
     # OLED: packed bits, no padding
     return (width * height) // 8
 
@@ -196,7 +191,7 @@ def receive_screenshot(ser, timeout=5, code=RESP_CODE_SCREENSHOT):
         received_chunks += 1
 
         if received_chunks >= total_chunks:
-            expected = _expected_buffer_size(width, height, display_type)
+            expected = _expected_buffer_size(width, height, display_type, disp_rotation)
             if len(buffer_data) != expected:
                 print(f"Error: Expected {expected} bytes, got {len(buffer_data)}")
                 return None
@@ -245,24 +240,14 @@ def eink_buffer_to_image(buffer, log_width, log_height, rotation):
       rot 2: phys_x = WIDTH-1-lx,   phys_y = HEIGHT-1-ly  (WIDTH = log_width, HEIGHT = log_height)
       rot 3: phys_x = ly,           phys_y = HEIGHT-1-lx  (HEIGHT = log_width)
 
-    Physical HEIGHT (panel's longer dimension) = max(log_w, log_h) for any rotation.
-    stride = buffer_size // HEIGHT  (no panel-specific constants needed).
+    The rotation determines the physical width and height. On the
+    T-Echo Lite Kit the physical width (192) exceeds the height (176).
     """
     if log_width == 0 or log_height == 0:
         return Image.new("RGB", (1, 1), (255, 255, 255))
 
-    # Physical HEIGHT is always the longer dimension (panel HEIGHT regardless of rotation).
-    phys_height = max(log_width, log_height)
-    phys_stride = len(buffer) // phys_height    # bytes per physical row (e.g. 16 for 128-wide panel)
-
-    # vis_w / vis_h are the GFX WIDTH / HEIGHT constants (from GxEPD2's Adafruit_GFX init).
-    # For odd rotations GFX swaps them, so we reverse-swap to get the physical sizes.
-    if rotation & 1:            # odd: GFX was initialized (WIDTH_VIS, HEIGHT) but swapped
-        vis_w = log_height      # = GFX WIDTH  = WIDTH_VISIBLE (e.g. 122)
-        vis_h = log_width       # = GFX HEIGHT = physical HEIGHT (e.g. 250)
-    else:                       # even: no swap
-        vis_w = log_width       # = GFX WIDTH  = WIDTH_VISIBLE
-        vis_h = log_height      # = GFX HEIGHT = physical HEIGHT
+    vis_w, vis_h = (log_height, log_width) if rotation & 1 else (log_width, log_height)
+    phys_stride = len(buffer) // vis_h
 
     image  = Image.new("RGB", (log_width, log_height), (255, 255, 255))
     pixels = image.load()

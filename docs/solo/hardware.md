@@ -182,3 +182,43 @@ Symbols opens the keyboard's symbols page while a text field is open.
 Extra hardware (a buzzer, a vibration motor, a Hall sensor for a magnetic
 cover, GPIO, an external PA) is enabled with build flags in your own
 `solo/<board>/platformio.ini`; see [Build flags](./developer/build-flags.md).
+
+## LilyGO T-Echo Lite Kit with KeyShield
+
+Build the Žygis kit with `pio run -e LilyGo_T-Echo-Lite_keyshield_zygis`.
+Use the manual Žygis release workflow for DFU ZIP and UF2 packages. The kit
+target keeps the Solo T-Echo Lite application and ExtraFS boundaries. The
+updater checks the connected board identity before performing an application
+update and compares the identity, radio settings and channel slots after reboot.
+
+The e-paper splash shows the Žygis emblem and WarDaddy credit with live startup
+progress. At Ready, press a key to enter the carousel. The carousel uses the
+AIDAS9 32×32 side and 48×48 center icon assets or matching Font Awesome Free
+bitmaps along with the Žygis status row and menu destinations. Up and Down move
+through the carousel. Center selects, Esc goes back, and Home opens the
+carousel. Press Up and then the center Square key to show the clock-only
+screen. Repeat the sequence to return to the carousel. The keypad illuminates
+during input and goes dark after inactivity and during the clock lock.
+
+Mail opens a composer in the current conversation. No/X opens a message
+deletion confirmation in a conversation and backspaces while typing. The
+confirmation starts on Cancel. The optional Keep messages setting retains up
+to 192 records across channels, private messages and rooms in the kit’s shared
+flash space. Archived messages retain their read marks, receive measurements
+and local deletion state. A companion sync has its own delivery queue.
+The kit stores newly accepted room passwords by full public key and prompts
+when older prefix-only credentials would otherwise be reused.
+
+Open **Settings → Tracking** to bind and verify a private channel. Bound
+channels have protected name, key, scope and deletion controls on the kit.
+Open **Settings → Sound → Notification LEDs** to select a blue or green
+pattern for each message or discovery event. Tracking TX and GPS fix bursts
+take priority over these patterns. The tracking scheduler continues while the
+clock is locked.
+
+For bench testing, run `scripts/zygis.py flash-kit --help` and
+`scripts/zygis.py test-kit-pair --help` with the PlatformIO Python. The
+two-radio test uses a temporary private channel on each radio. It restores
+the kit's radio settings and tracking binding after the test. Use
+`status channel clear` through the local USB CLI to clear a kit's tracking
+binding.

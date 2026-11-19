@@ -1123,7 +1123,7 @@ struct KeyboardWidget {
     if (prompt) { d.drawTextCentered(W / 2, y, prompt); y += lh + 2; }
     char shown[KB_MAX_LEN + 2];
     int sl = 0;
-    if (isPin() && pin_kb_mask_enabled) { for (int i = 0; i < len && sl < KB_MAX_LEN; i++) shown[sl++] = '*'; shown[sl] = 0; }
+    if (pin_kb_mask_enabled) { for (int i = 0; i < len && sl < KB_MAX_LEN; i++) shown[sl++] = '*'; shown[sl] = 0; }
     else { memcpy(shown, buf, len + 1); sl = len; }
     const char* from = shown;
     while (*from && (int)d.getTextWidth(from) > W - 6) {   // drop whole letters from the front

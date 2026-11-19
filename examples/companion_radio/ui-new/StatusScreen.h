@@ -133,6 +133,17 @@ private:
     }
     snprintf(a, sizeof(a), "%d dBm", (int)radio_driver.getTxPower());
     row(d, f, rsv, "TX power", a);
+#ifdef ZYGIS_KIT_UX
+    row(d, f, rsv, "RX gain", p && p->rx_boosted_gain ? "Boosted" : "Normal");
+    snprintf(a, sizeof(a), "%lu / %lu s", the_mesh.getReceiveAirTime() / 1000, the_mesh.getTotalAirTime() / 1000);
+    row(d, f, rsv, "Airtime RX/TX", a);
+    if (totalRx() && radio_driver.getNoiseFloor()) {
+      snprintf(a, sizeof(a), "%d dB", int(radio_driver.getLastRSSI() - radio_driver.getNoiseFloor()));
+    } else {
+      strcpy(a, "Unavailable");
+    }
+    row(d, f, rsv, "RX above noise", a);
+#endif
     // Bytes per repeater in a path we send (Settings > Radio > Advanced).
     const unsigned hb = p ? p->path_hash_mode + 1u : 1u;
     snprintf(a, sizeof(a), "%u byte%s", hb, hb > 1 ? "s" : "");
@@ -167,6 +178,10 @@ private:
       info::valueRow(d, f.at, "GPS", nullptr, false, rsv, 1);
       info::toggle(d, d.width() - rsv - 2, f.at, on);
     }
+#ifdef ZYGIS_KIT_UX
+    row(d, f, rsv, "Tracking", on ? "Enabled" : "Paused");
+    row(d, f, rsv, "Channel binding", the_mesh.trackingChannel() == 255 ? "Not set" : "Configured");
+#endif
     LocationProvider* loc = sensors.getLocationProvider();
 #ifdef STATUS_HAS_SKY
     GpsSky* g = skyview::sky();
@@ -310,11 +325,21 @@ private:
     row(d, f, rsv, "Acks, paths", a);
     snprintf(a, sizeof(a), "%lu", (unsigned long)the_mesh.getNumForwarded());
     row(d, f, rsv, "Forwarded", a);
+#ifdef ZYGIS_KIT_UX
+    snprintf(a, sizeof(a), "%lu / %lu", (unsigned long)the_mesh.getNumRecvDirect(), (unsigned long)the_mesh.getNumSentDirect());
+    row(d, f, rsv, "Direct RX/TX", a);
+    snprintf(a, sizeof(a), "%lu / %lu", (unsigned long)the_mesh.getNumRecvFlood(), (unsigned long)the_mesh.getNumSentFlood());
+    row(d, f, rsv, "Flood RX/TX", a);
+#endif
     snprintf(a, sizeof(a), "%d", heardLastHour());
     row(d, f, rsv, "Heard in 1 h", a);
     snprintf(a, sizeof(a), "%d", the_mesh.getNumContacts());
     row(d, f, rsv, "Contacts", a);
   }
+
+#ifdef ZYGIS_KIT_UX
+  uint32_t _kitStorageAt = 0, _kitStorageUsed = 0, _kitStorageTotal = 0;
+#endif
 
   void tabSystem(DisplayDriver& d, info::Flow& f, int rsv) {
     char a[32];
@@ -323,8 +348,28 @@ private:
     if (dd) snprintf(a, sizeof(a), "%lud %luh %lum", dd, h, m);
     else    snprintf(a, sizeof(a), "%luh %lum", h, m);
     row(d, f, rsv, "Uptime", a);
+#ifdef ZYGIS_KIT_UX
+    row(d, f, rsv, "Firmware", FIRMWARE_VERSION);
+    row(d, f, rsv, "Author", "WarDaddy");
+    row(d, f, rsv, "Reset", board.getResetReasonString(board.getResetReason()));
+    row(d, f, rsv, "Bluetooth", _task->isBluetoothEnabled() ? "On" : "Off");
+    if (!_kitStorageAt || millis() - _kitStorageAt >= 30000) {
+      auto* store = the_mesh.getDataStore();
+      _kitStorageUsed = store->getStorageUsedKb();
+      _kitStorageTotal = store->getStorageTotalKb();
+      _kitStorageAt = (millis() - 1) | 1;
+    }
+    if (_kitStorageTotal) {
+      const uint32_t free = _kitStorageUsed < _kitStorageTotal ? _kitStorageTotal - _kitStorageUsed : 0;
+      snprintf(a, sizeof(a), "%lu / %lu KB", (unsigned long)free, (unsigned long)_kitStorageTotal);
+    } else {
+      strcpy(a, "Unavailable");
+    }
+    row(d, f, rsv, "Free storage", a);
+#else
     diag::shortVersion(a, sizeof(a));
     row(d, f, rsv, "Firmware", a);
+#endif
     row(d, f, rsv, "Built", FIRMWARE_BUILD_DATE);
     row(d, f, rsv, "Device", board.getManufacturerName());
     row(d, f, rsv, "QR codes", _task->oneButtonUi() ? "Hold: you, manual" : "Enter: you, manual");

@@ -82,6 +82,7 @@ class MicroNMEALocationProvider : public LocationProvider {
     bool _uart_seen = false;
     bool _nmea_seen = false;
     bool _fix_seen = false;
+    uint32_t _fix_generation = 0;
 
     static uint32_t ageMs(unsigned long timestamp) {
         return (uint32_t)(millis() - timestamp);
@@ -273,6 +274,7 @@ public:
                     const char* message_id = nmea.getMessageID();
                     if (parsed && isValid() &&
                         (strcmp(message_id, "GGA") == 0 || strcmp(message_id, "RMC") == 0)) {
+                        if (!_fix_seen || millis() - _last_fix_ms > 15000) ++_fix_generation;
                         _last_fix_ms = millis();
                         _fix_seen = true;
                     }
@@ -305,6 +307,7 @@ public:
     }
 
 #ifdef PRIVATE_STATUS_REPORTER
+    uint32_t getFixGeneration() const override { return _fix_generation; }
     bool hasFreshFix(uint32_t max_age_ms) override {
         return _fix_seen && isValid() && millis() - _last_fix_ms <= max_age_ms;
     }

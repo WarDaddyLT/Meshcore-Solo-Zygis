@@ -17,7 +17,7 @@ public:
 
   bool isLoggedIn(const uint8_t* pub_key) const {
     for (int i = 0; i < _count; i++)
-      if (memcmp(_prefix[(_head + i) % TABLE_SIZE], pub_key, 4) == 0) return true;
+      if (memcmp(_prefix[(_head + i) % TABLE_SIZE], pub_key, KEY_SIZE) == 0) return true;
     return false;
   }
 
@@ -35,14 +35,14 @@ public:
     snprintf(_pw, sizeof(_pw), "%s", password);
     uint32_t est = 0;
     if (!the_mesh.sendRoomLogin(ci, password, est)) { _pending = false; return false; }
-    memcpy(_pending_key, ci.id.pub_key, 4);
+    memcpy(_pending_key, ci.id.pub_key, KEY_SIZE);
     _pending = true;
     _deadline = millis() + est + 4000;   // same margin as a DM's ACK wait
     return true;
   }
 
   bool loggingIn() const { return _pending; }
-  bool loggingIn(const uint8_t* pub_key) const { return _pending && memcmp(_pending_key, pub_key, 4) == 0; }
+  bool loggingIn(const uint8_t* pub_key) const { return _pending && memcmp(_pending_key, pub_key, KEY_SIZE) == 0; }
 
   // Local only: the room ACL has no session to tear down (MyMesh::logoutRoom()).
   void logout(const uint8_t* pub_key) {
@@ -71,13 +71,13 @@ public:
       the_mesh.forgetRoomPassword(pub_key);
       _outcome = LOGIN_FAILED;
     }
-    memcpy(_outcome_key, pub_key, 4);
+    memcpy(_outcome_key, pub_key, sizeof(_outcome_key));
     return true;
   }
 
   void loop() {
     if (_pending && (int32_t)(millis() - _deadline) > 0) {
-      memcpy(_outcome_key, _pending_key, 4);
+      memcpy(_outcome_key, _pending_key, sizeof(_outcome_key));
       cancel();
       _outcome = LOGIN_TIMEOUT;
     }
@@ -92,6 +92,11 @@ public:
   }
 
 private:
+#ifdef ZYGIS_KIT_UX
+  static const int KEY_SIZE = PUB_KEY_SIZE;
+#else
+  static const int KEY_SIZE = 4;
+#endif
   static const int TABLE_SIZE = 8;   // oldest dropped when full
 
   void markLoggedIn(const uint8_t* pub_key) {
@@ -99,23 +104,23 @@ private:
     int pos;
     if (_count < TABLE_SIZE) pos = (_head + _count++) % TABLE_SIZE;
     else { pos = _head; _head = (_head + 1) % TABLE_SIZE; }
-    memcpy(_prefix[pos], pub_key, 4);
+    memcpy(_prefix[pos], pub_key, KEY_SIZE);
   }
 
   void forget(const uint8_t* pub_key) {
     for (int i = 0; i < _count; i++) {
-      if (memcmp(_prefix[(_head + i) % TABLE_SIZE], pub_key, 4) != 0) continue;
+      if (memcmp(_prefix[(_head + i) % TABLE_SIZE], pub_key, KEY_SIZE) != 0) continue;
       for (int j = i; j < _count - 1; j++)
-        memcpy(_prefix[(_head + j) % TABLE_SIZE], _prefix[(_head + j + 1) % TABLE_SIZE], 4);
+        memcpy(_prefix[(_head + j) % TABLE_SIZE], _prefix[(_head + j + 1) % TABLE_SIZE], KEY_SIZE);
       _count--;
       return;
     }
   }
 
-  uint8_t _prefix[TABLE_SIZE][4];
+  uint8_t _prefix[TABLE_SIZE][KEY_SIZE];
   int _head = 0, _count = 0;
   char _pw[16] = "";            // of the login in flight, saved on success
-  uint8_t _pending_key[4] = {0};
+  uint8_t _pending_key[KEY_SIZE] = {0};
   bool _pending = false;
   uint32_t _deadline = 0;
   Outcome _outcome = NONE;

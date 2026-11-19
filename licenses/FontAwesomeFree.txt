@@ -1,0 +1,16 @@
+Font Awesome Free, by Fonticons, Inc.
+https://fontawesome.com/
+Icons licensed under Creative Commons Attribution 4.0 International.
+https://creativecommons.org/licenses/by/4.0/
+https://fontawesome.com/license/free
+
+The four icons in KitCarouselIcons.h were rasterized into 32x32 and 48x48
+monochrome bitmaps by AIDAS9. These bitmaps are copied without changes to the
+pixel data from the AIDAS9 source at commit 3134ba4e.
+https://github.com/ksk-lizdeika/MeshCore/tree/3134ba4e/examples/companion_radio/ui-new
+
+The six supplemental icons were rendered by Žygis from the Font Awesome Free
+6.7.2 source. They were centered and converted to one-bit 32x32 and 48x48
+bitmaps for the kit.
+https://github.com/FortAwesome/Font-Awesome/tree/6.7.2/svgs/solid
+https://github.com/FortAwesome/Font-Awesome/blob/6.7.2/svgs/brands/bluetooth-b.svg

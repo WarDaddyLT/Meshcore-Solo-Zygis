@@ -62,6 +62,16 @@ public:
     _on = _fs && prefs && prefs->msg_keep;
     if (_on) {
       scan();
+#ifdef ZYGIS_KIT_UX
+      loadKitDeletes();
+      loadKitReadMarks();
+      Rec record;
+      if (lastRec(_ch, _ch.last, record)) _ch_done = record.id;
+      if (lastRec(_dm, _dm.last, record)) _dm_done = record.id;
+      _seq = max(max(_ch_done, _dm_done), _kitMarkAll);
+      for (unsigned i = 0; i < _kitMarkCount; ++i) _seq = max(_seq, uint32_t(_kitMarks[i].id));
+      for (unsigned i = 0; i < _deletedCount; ++i) _seq = max(_seq, _deleted[i]);
+#endif
       restore();
     } else if (_fs && hasLog()) {
       forget();   // Keep messages off since the last start, see loop()
@@ -73,7 +83,14 @@ public:
   // ── HistArchive ────────────────────────────────────────────────────────────
   // arc_id orders the entries of this run; a restored one keeps 0, already saved.
   void chAppend(ChHistEntry& e) override {
+#ifdef ZYGIS_KIT_UX
+    ChannelDetails channel;
+    e.archiveRequested = chanctl::saved(_prefs, e.ch_idx) && the_mesh.getChannel(e.ch_idx, channel);
+    e.archiveChannelKey = e.archiveRequested ? channelKey(channel) : 0;
+    e.conversation = e.archiveRequested ? kitConversationId(channel.channel.secret, sizeof(channel.channel.secret)) : 0;
+#else
     if (!chanctl::saved(_prefs, e.ch_idx)) { e.arc_id = NOT_SAVED; return; }
+#endif
     e.arc_id = ++_seq;
     appended();
   }
@@ -115,15 +132,29 @@ public:
     int in_ring = 0;
     for (int j = 0; j < _history->chHistCount(); j++) {
       const ChHistEntry& e = _history->chAtPos(_history->chHistPosNewest(j));
-      if (e.ch_idx == slot && e.arc_id <= _ch_done) in_ring++;
+      if (e.ch_idx == slot && e.arc_id <= _ch_done
+#ifdef ZYGIS_KIT_UX
+          && e.archiveRequested
+#endif
+          ) in_ring++;
     }
+#ifdef ZYGIS_KIT_UX
+    _pgConversation = kitConversationId(ch.channel.secret, sizeof(ch.channel.secret));
+#endif
     return pageBegin(&_ch, channelKey(ch), (uint8_t)slot, in_ring);
   }
   bool pageBeginDm(const uint8_t* prefix) {
+#ifdef ZYGIS_KIT_UX
+    _pgConversation = kitConversationId(prefix, PUB_KEY_SIZE);
+#endif
     int in_ring = 0;
     for (int j = 0; j < _history->dmHistCount(); j++) {
       const DmHistEntry& e = _history->dmAtPos(_history->dmHistPosNewest(j));
-      if (memcmp(e.prefix, prefix, 4) == 0 && e.arc_id <= _dm_done) in_ring++;
+      if (memcmp(e.prefix, prefix, 4) == 0 && e.arc_id <= _dm_done
+#ifdef ZYGIS_KIT_UX
+          && e.conversation == _pgConversation
+#endif
+          ) in_ring++;
     }
     uint32_t key;
     memcpy(&key, prefix, 4);
@@ -192,8 +223,53 @@ public:
     return true;
   }
 
+#ifdef ZYGIS_KIT_UX
+  bool kitUnread(uint64_t conversation, uint32_t id) const {
+    if (id <= _kitMarkAll) return false;
+    for (unsigned i = 0; i < _kitMarkCount; ++i)
+      if (_kitMarks[i].conversation == conversation) return id > _kitMarks[i].id;
+    return true;
+  }
+
+  void markKitChannelRead(int slot) {
+    for (int i = 0; i < _history->histCountForChannel(slot); ++i) {
+      const auto& e = _history->chAtPos(_history->histEntryForChannel(slot, i));
+      if (e.incomingUnread && e.conversation) { markKitRead(e.conversation, e.arc_id); return; }
+    }
+  }
+
+  void markKitDirectRead(const uint8_t* pubKey) {
+    const uint64_t conversation = kitConversationId(pubKey, PUB_KEY_SIZE);
+    for (int i = 0; i < _history->dmHistCount(); ++i) {
+      const auto& e = _history->dmAtPos(_history->dmHistPosNewest(i));
+      if (e.conversation == conversation && e.incomingUnread) { markKitRead(conversation, e.arc_id); return; }
+    }
+  }
+
+  void markKitAllRead() {
+    if (!_on || _seq <= _kitMarkAll) return;
+    _kitMarkAll = _seq;
+    _kitMarkCount = 0;
+    saveKitReadMarks();
+  }
+
+  // Commit the marker before hiding a record that is already on flash.
+  bool deleteKitMessage(bool channel, uint32_t id) {
+    if (!id) return false;
+    const uint32_t done = channel ? _ch_done : _dm_done;
+    if (_fs && id <= done && !kitDeleted(id) && !saveKitDelete(id)) return false;
+    if (_pg) pageEnd();
+    _history->eraseKitMessage(channel, id);
+    return true;
+  }
+#endif
+
 private:
+#ifdef ZYGIS_KIT_UX
+  static constexpr const char* ROOT = "/kitlog";
+#else
   static constexpr const char* ROOT = "/h";
+#endif
   // arc_id of a message that stays in the ring: a channel with Save off. Above
   // any _ch_done, so it never counts as in the log (pageBeginCh).
   static const uint32_t NOT_SAVED = 0xFFFFFFFFUL;
@@ -205,8 +281,18 @@ private:
     uint8_t  flags;       // AckState, | OUTGOING
     uint8_t  path_len;    // packed, as mesh::Packet::path_len
     uint8_t  text_len;
+#ifdef ZYGIS_KIT_UX
+    uint32_t id;
+    int16_t rssi;
+    int8_t snrQuarterDb;
+    uint64_t conversation;
+    uint32_t checksum;
+#endif
   };
   static const uint8_t OUTGOING = 0x80, STATUS_MASK = 0x03;
+#ifdef ZYGIS_KIT_UX
+  static const uint8_t KIT_UNREAD = 0x40;
+#endif
   static const int REC_MAX = sizeof(Rec) + MAX_HIST_PATH_BYTES + MSG_TEXT_BUF + 1;
 
   // A log: segments first..last (0 = none yet), in_last records in the newest.
@@ -216,6 +302,123 @@ private:
     uint16_t in_last;
   };
   struct Spot { uint32_t seg, pos; };   // a place in a log; seg 0: before its start
+
+#ifdef ZYGIS_KIT_UX
+  static constexpr const char* DELETES_FILE = "/kitdel1";
+  static constexpr const char* DELETES_TMP = "/kitdel.tmp";
+  static constexpr unsigned DELETES_MAX = 128;
+  uint32_t _deleted[DELETES_MAX] = {};
+  unsigned _deletedCount = 0;
+
+  bool kitDeleted(uint32_t id) const {
+    for (unsigned i = 0; i < _deletedCount; ++i) if (_deleted[i] == id) return true;
+    return false;
+  }
+
+  void loadKitDeletes() {
+    File file = openRead(DELETES_FILE);
+    if (!file || file.size() > sizeof(_deleted) || file.size() % sizeof(uint32_t)) return;
+    const int size = file.size();
+    if (size && file.read((uint8_t*)_deleted, size) == size) _deletedCount = size / sizeof(uint32_t);
+    file.close();
+  }
+
+  uint32_t oldestKitId(const Log& log) {
+    for (uint32_t seg = log.first; seg && seg <= log.last; ++seg) {
+      char name[24];
+      filePath(log, seg, name, sizeof(name));
+      File file = openRead(name);
+      Rec r;
+      if (file && file.read((uint8_t*)&r, sizeof(r)) == int(sizeof(r))) return r.id;
+    }
+    return UINT32_MAX;
+  }
+
+  bool saveKitDelete(uint32_t id) {
+    const uint32_t oldest = min(oldestKitId(_ch), oldestKitId(_dm));
+    uint32_t ids[DELETES_MAX];
+    unsigned n = 0;
+    for (unsigned i = 0; i < _deletedCount; ++i) {
+      if (_deleted[i] >= oldest) ids[n++] = _deleted[i];
+    }
+    if (n == DELETES_MAX) return false;
+    ids[n++] = id;
+    DataStore* store = the_mesh.getDataStore();
+    File file = store->openWrite(_fs, DELETES_TMP);
+    if (!file) return false;
+    const size_t size = n * sizeof(ids[0]);
+    const bool written = file.write((const uint8_t*)ids, size) == size;
+    file.close();
+    if (!written || !store->commitFile(_fs, DELETES_TMP, DELETES_FILE)) return false;
+    memcpy(_deleted, ids, size);
+    _deletedCount = n;
+    return true;
+  }
+
+  static constexpr const char* READS_FILE = "/kitread1";
+  static constexpr const char* READS_TMP = "/kitread.tmp";
+  struct __attribute__((packed)) ReadMark { uint64_t conversation; uint32_t id; };
+  static constexpr unsigned MARKS_MAX = 64;
+  ReadMark _kitMarks[MARKS_MAX] = {};
+  unsigned _kitMarkCount = 0;
+  uint32_t _kitMarkAll = 0;
+
+  void loadKitReadMarks() {
+    File file = openRead(READS_FILE);
+    if (!file || file.size() < sizeof(_kitMarkAll)) return;
+    const unsigned size = file.size() - sizeof(_kitMarkAll);
+    if (size > sizeof(_kitMarks) || size % sizeof(ReadMark)) return;
+    if (file.read((uint8_t*)&_kitMarkAll, sizeof(_kitMarkAll)) == sizeof(_kitMarkAll) &&
+        (size == 0 || file.read((uint8_t*)_kitMarks, size) == int(size))) {
+      _kitMarkCount = size / sizeof(ReadMark);
+    } else {
+      _kitMarkAll = 0;
+    }
+    file.close();
+  }
+
+  void saveKitReadMarks() {
+    DataStore* store = the_mesh.getDataStore();
+    File file = store->openWrite(_fs, READS_TMP);
+    if (!file) return;
+    const size_t size = _kitMarkCount * sizeof(ReadMark);
+    const bool written = file.write((const uint8_t*)&_kitMarkAll, sizeof(_kitMarkAll)) == sizeof(_kitMarkAll)
+      && (!size || file.write((const uint8_t*)_kitMarks, size) == size);
+    file.close();
+    if (written) store->commitFile(_fs, READS_TMP, READS_FILE);
+  }
+
+  void markKitRead(uint64_t conversation, uint32_t id) {
+    if (!_on || !kitUnread(conversation, id)) return;
+    for (unsigned i = 0; i < _kitMarkCount; ++i) {
+      ReadMark& mark = _kitMarks[i];
+      if (mark.conversation != conversation) continue;
+      mark.id = id;
+      saveKitReadMarks();
+      return;
+    }
+    if (_kitMarkCount == MARKS_MAX) {
+      const uint32_t oldest = min(oldestKitId(_ch), oldestKitId(_dm));
+      for (unsigned i = 0; i < _kitMarkCount; ++i) {
+        if (_kitMarks[i].id >= oldest) continue;
+        _kitMarks[i] = _kitMarks[--_kitMarkCount];
+        break;
+      }
+      if (_kitMarkCount == MARKS_MAX) return;
+    }
+    _kitMarks[_kitMarkCount++] = {conversation, id};
+    saveKitReadMarks();
+  }
+
+  static uint32_t recordChecksum(const Rec& r, const uint8_t* payload) {
+    uint32_t hash = 2166136261u;
+    const uint8_t* header = reinterpret_cast<const uint8_t*>(&r);
+    for (size_t i = 0; i < offsetof(Rec, checksum); ++i) hash = (hash ^ header[i]) * 16777619u;
+    const int len = pathBytes(r.path_len) + r.text_len;
+    for (int i = 0; i < len; ++i) hash = (hash ^ payload[i]) * 16777619u;
+    return hash;
+  }
+#endif
 
   void touch() {
     if (!_on || _dirty) return;
@@ -235,6 +438,10 @@ private:
   }
   uint16_t segRecords(const Log& l) const {
     uint32_t total = NodePrefs::msgKeepTotal(_prefs->msg_keep);
+#ifdef ZYGIS_KIT_UX
+    // Internal ExtraFS is shared with contacts and channels. Bound log size.
+    if (total > 192) total = 192;
+#endif
     return (uint16_t)((l.kind == 'c' ? total * 2 / 3 : total / 3) / SEGMENTS);
   }
   static int pathBytes(uint8_t path_len) {
@@ -271,10 +478,20 @@ private:
     for (int j = _history->chHistCount() - 1; j >= 0; j--) {
       const ChHistEntry& e = _history->chAtPos(_history->chHistPosNewest(j));
       if (e.arc_id <= _ch_done || e.arc_id == NOT_SAVED) continue;
+#ifdef ZYGIS_KIT_UX
+      if (!e.archiveRequested) continue;
+#endif
       if (!all && e.relay_status == ACK_PENDING && now - e.timestamp < SETTLE_SECS) { more = true; break; }
+#ifdef ZYGIS_KIT_UX
+      if (!put(_ch, f, e.archiveChannelKey, e.timestamp, 0,
+               e.relay_status | (e.incomingUnread ? KIT_UNREAD : 0),
+               e.path_len, e.path, e.text, e.arc_id, e.signal, e.conversation)) { more = true; break; }
+#else
       ChannelDetails ch;
       if (the_mesh.getChannel(e.ch_idx, ch) && ch.name[0] &&
-          !put(_ch, f, channelKey(ch), e.timestamp, 0, e.relay_status, e.path_len, e.path, e.text)) break;
+          !put(_ch, f, channelKey(ch), e.timestamp, 0,
+               e.relay_status, e.path_len, e.path, e.text)) break;
+#endif
       _ch_done = e.arc_id;
     }
     if (f) f.close();
@@ -290,8 +507,15 @@ private:
       if (!all && e.ack_status == ACK_PENDING) { more = true; break; }
       uint32_t key;
       memcpy(&key, e.prefix, 4);
-      if (!put(_dm, f, key, e.timestamp, e.msg_ts, e.ack_status | (e.outgoing ? OUTGOING : 0),
-               e.path_len, e.path, e.text)) break;
+      if (!put(_dm, f, key, e.timestamp, e.msg_ts, e.ack_status | (e.outgoing ? OUTGOING : 0)
+#ifdef ZYGIS_KIT_UX
+               | (e.incomingUnread ? KIT_UNREAD : 0)
+#endif
+               , e.path_len, e.path, e.text
+#ifdef ZYGIS_KIT_UX
+               , e.arc_id, e.signal, e.conversation
+#endif
+               )) { more = true; break; }
       _dm_done = e.arc_id;
     }
     if (f) f.close();
@@ -299,7 +523,11 @@ private:
   }
 
   bool put(Log& l, File& f, uint32_t key, uint32_t ts, uint32_t msg_ts, uint8_t flags, uint8_t path_len,
-           const uint8_t* path, const char* text) {
+           const uint8_t* path, const char* text
+#ifdef ZYGIS_KIT_UX
+           , uint32_t id, MessageSignal signal, uint64_t conversation
+#endif
+           ) {
     if (!f || !l.last || l.in_last >= segRecords(l)) {
       if (f) f.close();
       if (!l.last || l.in_last >= segRecords(l)) nextSegment(l);
@@ -314,6 +542,14 @@ private:
     memcpy(buf, &r, sizeof(r));                  n += sizeof(r);
     memcpy(buf + n, path, pn);                   n += pn;
     memcpy(buf + n, text, r.text_len);           n += r.text_len;
+#ifdef ZYGIS_KIT_UX
+    r.id = id;
+    r.rssi = signal.rssi;
+    r.snrQuarterDb = signal.snrQuarterDb;
+    r.conversation = conversation;
+    r.checksum = recordChecksum(r, buf + sizeof(r));
+    memcpy(buf, &r, sizeof(r));
+#endif
     buf[n] = (uint8_t)(n + 1);                   n++;
     if ((int)f.write(buf, n) != n) return false;
     l.in_last++;
@@ -342,6 +578,13 @@ private:
 
   void forget() {
     dropAll();
+#ifdef ZYGIS_KIT_UX
+    _fs->remove(DELETES_FILE);
+    _deletedCount = 0;
+    _fs->remove(READS_FILE);
+    _kitMarkCount = 0;
+    _kitMarkAll = 0;
+#endif
     _dirty = false;
     _newest = 0;
     _ch = { 'c', 0, 0, 0 };
@@ -521,7 +764,13 @@ private:
         pos -= len;
         Rec r;
         if (!f.seek(pos) || f.read((uint8_t*)&r, sizeof(r)) != (int)sizeof(r) || !sane(r, len)) { pos += len; break; }
-        if ((!keys || chSlot(keys, r.key) >= 0) && r.timestamp >= cut) got++;
+        if ((!keys || chSlot(keys, r.key) >= 0) && r.timestamp >= cut) {
+#ifdef ZYGIS_KIT_UX
+          uint8_t buf[REC_MAX];
+          if (kitDeleted(r.id) || !readBody(f, pos, r, buf)) continue;
+#endif
+          got++;
+        }
       }
       seg0 = seg;
       off0 = pos;
@@ -537,9 +786,12 @@ private:
         Rec r;
         if (!f.seek(pos) || f.read((uint8_t*)&r, sizeof(r)) != (int)sizeof(r)) break;
         int rest = pathBytes(r.path_len) + r.text_len + 1;
-        if (r.text_len >= MSG_TEXT_BUF || f.read(buf, rest) != rest) break;
-        if (buf[rest - 1] != (uint8_t)(sizeof(r) + rest)) break;
-        if (r.timestamp >= cut) restoreRec(r, buf, keys);
+        if (!readBody(f, pos, r, buf)) break;
+        if (r.timestamp >= cut
+#ifdef ZYGIS_KIT_UX
+            && !kitDeleted(r.id)
+#endif
+            ) restoreRec(r, buf, keys);
         pos += sizeof(r) + rest;
       }
       f.close();
@@ -550,9 +802,18 @@ private:
     if (keys) {
       int slot = chSlot(keys, r.key);
       if (slot < 0) return;
+#ifdef ZYGIS_KIT_UX
+      ChannelDetails ch;
+      if (!the_mesh.getChannel(slot, ch) ||
+          kitConversationId(ch.channel.secret, sizeof(ch.channel.secret)) != r.conversation) return;
+#endif
       ChHistEntry e;
       fillCh(e, r, buf, (uint8_t)slot);
       _history->restoreCh(e);
+#ifdef ZYGIS_KIT_UX
+      if (e.incomingUnread && kitUnread(e.conversation, e.arc_id))
+        _history->setChUnread(slot, _history->chUnread(slot) + 1);
+#endif
     } else {
       DmHistEntry e;
       fillDm(e, r, buf);
@@ -564,7 +825,17 @@ private:
     int pn = pathBytes(r.path_len);
     memset(&e, 0, sizeof(e));
     e.ch_idx = slot;
+#ifdef ZYGIS_KIT_UX
+    e.archiveRequested = true;
+    e.archiveChannelKey = r.key;
+#endif
     e.timestamp = r.timestamp;
+#ifdef ZYGIS_KIT_UX
+    e.arc_id = r.id;
+    e.conversation = r.conversation;
+    e.incomingUnread = r.flags & KIT_UNREAD;
+    e.signal = {r.rssi, r.snrQuarterDb};
+#endif
     e.relay_status = r.flags & STATUS_MASK;
     e.path_len = r.path_len;
     memcpy(e.path, buf, pn);
@@ -576,6 +847,12 @@ private:
     memcpy(e.prefix, &r.key, 4);
     e.outgoing = (r.flags & OUTGOING) ? 1 : 0;
     e.timestamp = r.timestamp;
+#ifdef ZYGIS_KIT_UX
+    e.arc_id = r.id;
+    e.conversation = r.conversation;
+    e.incomingUnread = r.flags & KIT_UNREAD;
+    e.signal = {r.rssi, r.snrQuarterDb};
+#endif
     e.msg_ts = r.msg_ts;
     e.ack_status = r.flags & STATUS_MASK;
     e.path_len = r.path_len;
@@ -601,7 +878,11 @@ private:
     return false;
   }
 
-  bool mine(const Rec& r, uint32_t cut) const { return r.key == _pg_key && r.timestamp >= cut; }
+  bool mine(const Rec& r, uint32_t cut) const { return r.key == _pg_key && r.timestamp >= cut
+#ifdef ZYGIS_KIT_UX
+      && r.conversation == _pgConversation && !kitDeleted(r.id)
+#endif
+      ; }
 
   // Walks the conversation's records back from `from` until fn says stop:
   // where it stopped, or the log's start. fn(file, seg, pos, record).
@@ -633,7 +914,11 @@ private:
   static bool readBody(File& f, uint32_t pos, const Rec& r, uint8_t* buf) {
     int rest = pathBytes(r.path_len) + r.text_len + 1;
     return r.text_len < MSG_TEXT_BUF && f.seek(pos + sizeof(r)) && f.read(buf, rest) == rest &&
-           buf[rest - 1] == (uint8_t)(sizeof(r) + rest);
+           buf[rest - 1] == (uint8_t)(sizeof(r) + rest)
+#ifdef ZYGIS_KIT_UX
+           && r.checksum == recordChecksum(r, buf)
+#endif
+           ;
   }
 
   void fill(int i, const Rec& r, const uint8_t* buf) {
@@ -661,6 +946,9 @@ private:
   // the one after it does, and where the ring takes over from the log.
   Log*     _pg = nullptr;
   uint32_t _pg_key = 0;
+#ifdef ZYGIS_KIT_UX
+  uint64_t _pgConversation = 0;
+#endif
   uint8_t  _pg_slot = 0;
   int      _pg_n = 0;
   Spot     _lo = { 0, 0 }, _hi = { 0, 0 }, _ceil = { 0, 0 };

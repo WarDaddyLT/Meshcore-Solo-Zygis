@@ -353,6 +353,13 @@ protected:
   void sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, uint32_t delay_millis=0) override;
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;
 
+#ifdef TECHO_STATUS_LEDS
+  struct StatusLedPacket { mesh::Packet* packet = nullptr; uint8_t hash[MAX_HASH_SIZE]; };
+  StatusLedPacket status_led_packets[16]; // Same capacity as the packet pool.
+  uint8_t next_status_led_packet = 0;
+  bool building_status = false;
+  uint32_t last_fix_generation = 0;
+#endif
   void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
   void logRx(mesh::Packet* pkt, int len, float score) override { if (_listener) _listener->onPacketHeard(pkt); }
 #ifdef PRIVATE_STATUS_REPORTER

@@ -17,6 +17,13 @@ class SettingsScreen : public UIScreen {
   UITask* _task;
 
   enum SettingItem {
+#ifdef ZYGIS_KIT_UX
+#ifdef PRIVATE_STATUS_REPORTER
+    SECTION_TRACKING,
+    TRACKING_ENABLED, TRACKING_CHANNEL, TRACKING_INTERVAL, TRACKING_GPS,
+    TRACKING_SEND, TRACKING_VERIFY,
+#endif
+#endif
     // Display section
     SECTION_DISPLAY,
     SCHEMA_DISPLAY,   // the schema's display and time settings (ui-core/SettingsSchema.h)
@@ -33,6 +40,9 @@ class SettingsScreen : public UIScreen {
     // Sound section
     SECTION_SOUND,
     BUZZER,
+#ifdef ZYGIS_KIT_UX
+    KIT_NOTIFICATION_LEDS,
+#endif
     SCHEMA_SOUND,     // volume, quiet hours, what plays for what
     // Home pages section
     SECTION_HOME_PAGES,
@@ -50,10 +60,12 @@ class SettingsScreen : public UIScreen {
     TX_APC,
     SCOPE_NAME,
     SCHEMA_RADIO,     // the advanced radio options
+#ifndef ZYGIS_KIT_UX
 #ifdef PRIVATE_STATUS_REPORTER
     SECTION_TRACKING,
     TRACKING_ENABLED, TRACKING_CHANNEL, TRACKING_INTERVAL, TRACKING_GPS,
     TRACKING_SEND, TRACKING_VERIFY,
+#endif
 #endif
     // System section
     SECTION_SYSTEM,
@@ -110,6 +122,89 @@ class SettingsScreen : public UIScreen {
   char _tracking_labels[12][40];
   int8_t _tracking_slots[12];
   uint8_t _tracking_page = 0;
+
+#ifdef ZYGIS_KIT_UX
+  PopupMenu _kitLeds;
+  uint8_t _kitLedStage = 0, _kitLedEvent = 0, _kitLedColor = 0;
+  static constexpr const char* LED_SETTINGS_FILE = "/kitled1";
+
+  static constexpr const char* LED_EVENTS[] = {
+    "Channel message", "Private message", "Room message", "New channel",
+    "New client", "New room", "New repeater"
+  };
+  static constexpr const char* LED_PATTERNS[] = {"Off", "Single", "Double", "Slow triple"};
+
+  bool saveKitLeds(TechoBoard::LedEvent event, uint8_t led, uint8_t pattern) {
+    DataStore* store = the_mesh.getDataStore();
+    const char* tmp = "/kitled.tmp";
+    uint8_t bytes[TechoBoard::LED_EVENT_COUNT * 2];
+    for (unsigned i = 0; i < sizeof(bytes); ++i)
+      bytes[i] = board.ledPattern(TechoBoard::LedEvent(i / 2), i % 2);
+    bytes[uint8_t(event) * 2 + led] = pattern;
+    File file = store->openWrite(tmp);
+    if (!file) return false;
+    const bool written = file.write(bytes, sizeof(bytes)) == sizeof(bytes);
+    file.close();
+    if (!written || !store->commitFile(tmp, LED_SETTINGS_FILE)) return false;
+    board.setLedPattern(event, led, pattern);
+    return true;
+  }
+
+  void kitLedEvents() {
+    _kitLedStage = 0;
+    _kitLeds.begin("Notification LEDs");
+    for (const char* label : LED_EVENTS) _kitLeds.addItem(label);
+  }
+
+  void kitLedColors() {
+    _kitLedStage = 1;
+    _kitLeds.begin(LED_EVENTS[_kitLedEvent], 2);
+    _kitLeds.addItem("Blue LED");
+    _kitLeds.addItem("Green LED");
+  }
+
+  void kitLedInput(char c) {
+    const auto result = _kitLeds.handleInput(c);
+    const auto event = TechoBoard::LedEvent(_kitLedEvent);
+    if (result == PopupMenu::SELECTED) {
+      const int selected = _kitLeds.selectedIndex();
+      if (_kitLedStage == 0) {
+        _kitLedEvent = selected;
+        kitLedColors();
+      } else if (_kitLedStage == 1) {
+        _kitLedColor = selected;
+        _kitLedStage = 2;
+        _kitLeds.begin("Choose pattern", 4);
+        for (const char* item : LED_PATTERNS) _kitLeds.addItem(item);
+        _kitLeds.setSelected(board.ledPattern(event, _kitLedColor));
+      } else {
+        if (saveKitLeds(event, _kitLedColor, selected)) board.previewLed(_kitLedColor, selected);
+        else _task->showAlert("LED setting not saved", 2000);
+        kitLedColors();
+      }
+    } else if (result != PopupMenu::NONE) {
+      if (_kitLedStage == 2) kitLedColors();
+      else if (_kitLedStage == 1) kitLedEvents();
+    } else if (_kitLedStage == 2 && (c == KEY_UP || c == KEY_DOWN)) {
+      board.previewLed(_kitLedColor, _kitLeds.selectedIndex());
+    }
+  }
+
+public:
+  static void loadKitLeds() {
+    uint8_t bytes[TechoBoard::LED_EVENT_COUNT * 2];
+    File file = the_mesh.getDataStore()->openRead(LED_SETTINGS_FILE);
+    if (!file) return;
+    const bool valid = file.size() == sizeof(bytes) && file.read(bytes, sizeof(bytes)) == int(sizeof(bytes));
+    file.close();
+    if (!valid) return;
+    for (unsigned i = 0; i < sizeof(bytes); ++i) {
+      if (bytes[i] < TechoBoard::LED_PATTERN_COUNT)
+        board.setLedPattern(TechoBoard::LedEvent(i / 2), i % 2, bytes[i]);
+    }
+  }
+private:
+#endif
 
   void trackingAction(const char* command) {
     char reply[160];
@@ -528,6 +623,9 @@ class SettingsScreen : public UIScreen {
 
     drawRowSelection(display, y, sel, _reserve);
     display.setCursor(2, y);
+#ifdef ZYGIS_KIT_UX
+    if (item == KIT_NOTIFICATION_LEDS) { display.print("Notification LEDs"); return 0; }
+#endif
 
 #ifdef PRIVATE_STATUS_REPORTER
     if (item >= TRACKING_ENABLED && item <= TRACKING_VERIFY) {
@@ -782,6 +880,9 @@ public:
 #ifdef PRIVATE_STATUS_REPORTER
     _tracking_edit_interval = false;
     _tracking_channels.active = false;
+#ifdef ZYGIS_KIT_UX
+    _kitLeds.active = false;
+#endif
 #endif
     _edit_name = false;
     _scope_mgmt_active = false;
@@ -837,6 +938,9 @@ public:
 #ifdef PRIVATE_STATUS_REPORTER
     if (_tracking_channels.active) _tracking_channels.render(display);
 #endif
+#ifdef ZYGIS_KIT_UX
+    if (_kitLeds.active) _kitLeds.render(display);
+#endif
     if (_picker.menu.active) _picker.menu.render(display);
     if (_prune_confirm.active) _prune_confirm.render(display);
     if (_pos_menu.active) _pos_menu.render(display);
@@ -863,6 +967,9 @@ public:
   bool handleInput(char c) override {
     NodePrefs* p = _task->getNodePrefs();
 
+#ifdef ZYGIS_KIT_UX
+    if (_kitLeds.active) { kitLedInput(c); return true; }
+#endif
 #ifdef PRIVATE_STATUS_REPORTER
     if (_tracking_edit_interval) {
       auto result = _kb->handleInput(c);
@@ -1203,6 +1310,9 @@ public:
     bool left  = keyIsPrev(c);
     bool enter = (c == KEY_ENTER);
 
+#ifdef ZYGIS_KIT_UX
+    if (_selected == KIT_NOTIFICATION_LEDS && enter) { kitLedEvents(); return true; }
+#endif
 #ifdef PRIVATE_STATUS_REPORTER
     if (_selected == TRACKING_ENABLED && (enter || left || right)) {
       trackingAction(p && p->gps_enabled ? "gps off" : "gps on"); return true;

@@ -51,6 +51,10 @@ public:
   }
 
   int render(DisplayDriver& display) override {
+#ifdef ZYGIS_KIT_UX
+    drawKitBoot(display, 5, "Ready - press a key");
+    return 1000;
+#endif
 #ifdef ZYGIS_OLED_SPLASH
     if (display.width() == ZYGIS_SPLASH_WIDTH && display.height() == 64) {
       display.setColor(UIColor::primary_txt);
@@ -122,7 +126,7 @@ public:
   }
 
   bool handleInput(char) override {
-#ifdef ZYGIS_EINK_PORTRAIT
+#if defined(ZYGIS_EINK_PORTRAIT) || defined(ZYGIS_KIT_UX)
     _task->gotoHomeScreen();
     return true;
 #else
@@ -131,7 +135,7 @@ public:
   }
 
   void poll() override {
-#ifndef ZYGIS_EINK_PORTRAIT
+#if !defined(ZYGIS_EINK_PORTRAIT) && !defined(ZYGIS_KIT_UX)
     if ((int32_t)(millis() - dismiss_after) >= 0) {
       _task->gotoHomeScreen();
     }

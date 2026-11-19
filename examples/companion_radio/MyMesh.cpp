@@ -422,6 +422,15 @@ void MyMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, uint32
 }
 
 void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
+#ifdef ZYGIS_KIT_UX
+  if (is_new) {
+    switch (contact.type) {
+      case ADV_TYPE_CHAT: board.notifyLed(TechoBoard::LedEvent::NewClient); break;
+      case ADV_TYPE_ROOM: board.notifyLed(TechoBoard::LedEvent::NewRoom); break;
+      case ADV_TYPE_REPEATER: board.notifyLed(TechoBoard::LedEvent::NewRepeater); break;
+    }
+  }
+#endif
   if (_serial->isConnected()) {
     if (is_new) {
       writeContactRespFrame(PUSH_CODE_NEW_ADVERT, contact);
@@ -676,6 +685,13 @@ void MyMesh::sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, ui
   }
 }
 void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis) {
+#ifdef TECHO_STATUS_LEDS
+  if (building_status) {
+    auto& pending = status_led_packets[next_status_led_packet++ % 16];
+    pending.packet = pkt;
+    pkt->calculatePacketHash(pending.hash);
+  }
+#endif
   if (apcActive()) apcTrackFloodSend(pkt);   // listen for a repeater echo to drive APC (channels have no ACK)
   trackRelaySend(pkt);                          // and for the UI "relayed" marker
   if (_oneshot_scope_on) {
@@ -1108,13 +1124,22 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
   }
 }
 
+#ifdef ZYGIS_KIT_UX
+#define ROOM_PW_FILE "/kitroom1"
+#define ROOM_PW_TMP  "/kitroom.tmp"
+#else
 #define ROOM_PW_FILE "/room_pw"
 #define ROOM_PW_TMP  "/room_pw.tmp"
+#endif
 #define MAX_SAVED_ROOM_PASSWORDS 16
 
 namespace {
   struct RoomPwRec {
-    uint8_t key[4];   // pub-key prefix
+#ifdef ZYGIS_KIT_UX
+    uint8_t key[PUB_KEY_SIZE];
+#else
+    uint8_t key[4];
+#endif
     char pw[16];      // up to 15 chars + NUL
   };
 }
@@ -1721,8 +1746,17 @@ static bool isAllZero(const uint8_t* buf, size_t n) {
 // Channels add/edit/delete UI (ChannelsView) -- one place computing "was this
 // a delete" so the two callers can't drift on the cleanup step.
 bool MyMesh::setChannelLocal(uint8_t idx, const ChannelDetails& ch) {
+#ifdef ZYGIS_KIT_UX
+  ChannelDetails previous;
+  const bool empty = !getChannel(idx, previous) ||
+    isAllZero(previous.channel.secret, sizeof(previous.channel.secret));
+#endif
   if (!setChannel(idx, ch)) return false;
   saveChannels();
+#ifdef ZYGIS_KIT_UX
+  if (empty && !isAllZero(ch.channel.secret, sizeof(ch.channel.secret)))
+    board.notifyLed(TechoBoard::LedEvent::NewChannel);
+#endif
   // An all-zero secret is this codebase's "empty slot" sentinel (same check
   // loadChannels()/saveChannels() use) -- drop anything that referenced it by
   // index, the same way onContactRemoved() does for contacts.
@@ -3137,6 +3171,14 @@ void MyMesh::checkSerialInterface() {
 
 void MyMesh::loop() {
   BaseChatMesh::loop();
+#ifdef TECHO_STATUS_LEDS
+  auto location = sensors.getLocationProvider();
+  if (location && location->getFixGeneration() != last_fix_generation) {
+    last_fix_generation = location->getFixGeneration();
+    board.onGPSFix();
+  }
+  board.updateTrackerLeds();
+#endif
 
   // APC: a tracked channel/flood send that no repeater echoed within the window is
   // treated as a lost confirmation → ramp power up (lets channel sends recover).
@@ -3669,6 +3711,15 @@ bool MyMesh::handleStatusCommand(const char* cmd, char* reply) {
       ChannelDetails ch;
       if (getChannel(i, ch) && ch.name[0]) snprintf(reply + strlen(reply), 160 - strlen(reply), "\n%u: %s", i, ch.name);
     }
+  } else if (!strcmp(cmd, "status channel clear")) {
+    tracker_reply_count = tracker_reply_head = 0;
+    nearby_running = false;
+    nearby_request = nullptr;
+    tracker_prefs.status_channel = 255;
+    memset(tracker_prefs.status_key, 0, sizeof(tracker_prefs.status_key));
+    memset(tracker_prefs.status_name, 0, sizeof(tracker_prefs.status_name));
+    savePrefs();
+    strcpy(reply, "Status channel: cleared");
   } else if (!strncmp(cmd, "status channels ", 16) || !strncmp(cmd, "status channel ", 15)) {
     bool inspect = !strncmp(cmd, "status channels ", 16);
     uint32_t slot;

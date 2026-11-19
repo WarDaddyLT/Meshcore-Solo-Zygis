@@ -27,6 +27,7 @@ public:
     virtual long getHDOP() { return -1; }
     virtual bool isValid() = 0;
 #ifdef PRIVATE_STATUS_REPORTER
+    virtual uint32_t getFixGeneration() const { return 0; }
     virtual bool hasFreshFix(uint32_t) { return false; }
 #endif
 

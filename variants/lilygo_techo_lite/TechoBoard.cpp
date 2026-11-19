@@ -7,6 +7,12 @@
 
 void TechoBoard::begin() {
   NRF52BoardDCDC::begin();
+#ifdef TECHO_STATUS_LEDS
+  pinMode(LED_BLUE, OUTPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  digitalWrite(LED_BLUE, !LED_STATE_ON);
+  digitalWrite(LED_GREEN, !LED_STATE_ON);
+#endif
 
   // Configure battery measurement control BEFORE Wire.begin()
   // to ensure P0.02 is not claimed by another peripheral

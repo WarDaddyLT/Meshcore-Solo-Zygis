@@ -228,6 +228,16 @@ static void resolveBLEPin(bool has_display) {
   bool wifi_enabled = false;   // set at boot from prefs; false also when the effective SSID is blank
 #endif
 
+#ifdef ZYGIS_KIT_UX
+#include "ui-new/KitUx.h"
+static void kitBootProgress(DisplayDriver* panel, unsigned stage, const char* label) {
+  if (!panel) return;
+  panel->startFrame();
+  drawKitBoot(*panel, stage, label);
+  panel->endFrame();
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
   board.begin();
@@ -240,7 +250,9 @@ void setup() {
   DisplayDriver* disp = NULL;
   if (display.begin()) {
     disp = &display;
-  #if defined(SEEED_WIO_TRACKER_L2)
+  #if defined(ZYGIS_KIT_UX)
+    kitBootProgress(disp, 1, "Starting radio");
+  #elif defined(SEEED_WIO_TRACKER_L2)
     // L2: a plain black frame -- the panel's backlight comes on with it (WioTrackerL2Display
     // ::endFrame()). The default colours here (white background, black dots) came out as a
     // bright bar across the middle of the dark screen. LVGL's splash follows within a second.
@@ -261,9 +273,28 @@ void setup() {
   }
 #endif
 
+#ifdef ZYGIS_KIT_UX
+  if (!radio_init()) {
+    kitBootProgress(disp, 1, "Retrying radio");
+    delay(100);
+    if (!radio_init()) {
+      kitBootProgress(disp, 1, "Radio unavailable");
+      while (true) {
+        if (Serial) Serial.println("T-Echo: LoRa initialization failed");
+        delay(1000);
+      }
+    }
+  }
+  kitBootProgress(disp, 2, "Starting clock");
+  rtc_clock.begin(Wire);
+#else
   if (!radio_init()) { halt(); }
+#endif
 
   fast_rng.begin(radio_driver.getRngSeed());
+#ifdef ZYGIS_KIT_UX
+  kitBootProgress(disp, 3, "Loading settings");
+#endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   #ifdef ZYGIS_EINK_PORTRAIT
@@ -416,6 +447,9 @@ void setup() {
   if (the_mesh.getNodePrefs()->ble_off) interface_manager.disableBluetooth();
 
   store.restoreRTCTime();
+#ifdef ZYGIS_KIT_UX
+  kitBootProgress(disp, 4, "Starting sensors");
+#endif
   sensors.begin();
 
 #if ENV_INCLUDE_GPS == 1

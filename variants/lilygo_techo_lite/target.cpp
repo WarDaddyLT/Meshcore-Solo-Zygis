@@ -25,7 +25,9 @@ EnvironmentSensorManager sensors = EnvironmentSensorManager();
 #endif
 
 bool radio_init() {
+#ifndef ZYGIS_KIT_UX
   rtc_clock.begin(Wire);
+#endif
 
   return radio.std_init(&SPI);
 }

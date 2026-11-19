@@ -85,6 +85,12 @@ class UITask : public UITaskBase, public UiCoreHost {
   UIScreen* games_screen = nullptr;
 #endif
   unsigned long _next_refresh, _auto_off;
+#ifdef ZYGIS_KIT_UX
+  bool _kitLocked = false;
+  bool _kitWakeKey = false;
+  uint32_t _kitKeyActivity = 0;
+  uint32_t _kitBacklightUntil = 0;
+#endif
   bool _display_was_on = true;   // loop(): display on and unlocked last time round
   NodePrefs* _node_prefs;
   bool _locked;

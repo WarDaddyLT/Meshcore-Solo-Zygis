@@ -66,7 +66,11 @@ static const unsigned char keymap[5*4][9] = {
   {'g', 'h', 'i', 'G', 'H', 'I', '4'},
   {'j', 'k', 'l', 'J', 'K', 'L', '5'},
   {'m', 'n', 'o', 'M', 'N', 'O', '6'},
+#ifdef ZYGIS_KIT_UX
+  {KEY_KIT_SQUARE},
+#else
   {KEY_ENTER},
+#endif
   {'1'},
   {'a', 'b', 'c', 'A', 'B', 'C', '2'},
   {'d', 'e', 'f', 'D', 'E', 'F', '3'},
@@ -151,6 +155,14 @@ static void commit_pending_if_needed() {
   s_pendingIndex = 0xFF;
 }
 
+#ifdef ZYGIS_KIT_UX
+static uint32_t keyActivity = 0;
+static uint8_t keyPressCode = 0;
+uint8_t techoKeyshieldPressCode() { return keyPressCode; }
+uint32_t techoKeyshieldActivity() { return keyActivity; }
+bool techoKeyshieldPressed() { return s_downKeyIndex != 0xFF; }
+#endif
+
 char tca8418_keypad_read() {
   static bool inited = false;
   if (!inited) { keypad_init(); inited = true; }
@@ -178,9 +190,13 @@ char tca8418_keypad_read() {
   uint8_t row     = (code - 1) / 10;
   uint8_t col     = (code - 1) % 10;
   uint8_t key_index = row * 4 + col;
-  if (key_index >= 5*4) return 0;
+  if (code == 0 || row >= 5 || col >= 4) return 0;
 
   if (pressed) {
+#ifdef ZYGIS_KIT_UX
+    ++keyActivity;
+    keyPressCode = code;
+#endif
     // csak eltároljuk, a döntés (rövid/hosszú) a release-nél történik
     s_downKeyIndex = key_index;
     s_downTime     = now;

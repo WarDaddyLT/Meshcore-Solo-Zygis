@@ -65,6 +65,10 @@ static const char KEY_STEP = (char)0xF4;
 #include "icons.h"
 #include "../ui-core/Lettering.h"   // boot splash wordmark + lettering (shared with the L2)
 #include "GfxUtils.h"   // gfx::drawLine — connects trail points on the Home map preview
+#ifdef ZYGIS_KIT_UX
+#include "KitUx.h"
+#include "KitLockGesture.h"
+#endif
 #include "SplashScreen.h"
 
 static const int QUICK_MSGS_MAX = 10;
@@ -231,6 +235,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
   _core = new UiCore();   // also loads the persisted waypoints   // before any screen -- MessagesScreen binds to its history
   _core->begin(node_prefs, sensors, this);
+#ifdef ZYGIS_KIT_UX
+  SettingsScreen::loadKitLeds();
+#endif
   splash = new SplashScreen(this);
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   syncLockToHome();   // booted locked (e.g. cover closed) → home starts on the LOCK page
@@ -1981,8 +1988,67 @@ void UITask::loop() {
   pollHallSensor();
 #ifdef ENV_USE_TCA8418
   {
+#ifdef ZYGIS_KIT_UX
+    extern void techoKeyshieldSetBacklight(bool);
+    extern uint32_t techoKeyshieldActivity();
+    extern uint8_t techoKeyshieldPressCode();
+    extern bool techoKeyshieldPressed();
+    static KitLockGesture gesture;
+    static bool consumeSquareRelease = false;
+#endif
     extern char tca8418_keypad_read();   // provided by the active variant
     char k = tca8418_keypad_read();
+#ifdef ZYGIS_KIT_UX
+    const uint32_t now = millis();
+    uint32_t activity = techoKeyshieldActivity();
+    if (activity != _kitKeyActivity || k || techoKeyshieldPressed()) {
+      _kitBacklightUntil = now + 4500;
+      if (_display && !_display->isOn()) {
+        checkDisplayOn(0);
+        _kitWakeKey = true;
+        gesture.cancel();
+      }
+    }
+    const bool newPress = activity != _kitKeyActivity;
+    _kitKeyActivity = activity;
+    const uint8_t press = newPress ? techoKeyshieldPressCode() : 0;
+    const bool trackerOwnsKeys = tracker_alert_active || tracker_button_consumed ||
+      isRinging() || sosViewOpen() || curr == splash || _locked;
+    if (trackerOwnsKeys || _kitWakeKey) gesture.cancel();
+
+    if (press && press != 31 && press != 1 && consumeSquareRelease)
+      consumeSquareRelease = false;
+    if (!trackerOwnsKeys && !_kitWakeKey && (press == 31 || press == 1) && gesture.square(now)) {
+      _kitLocked = !_kitLocked;
+      _kq_head = _kq_tail = 0;
+      consumeSquareRelease = true;
+      techoKeyshieldSetBacklight(false);
+      _kitBacklightUntil = now;
+      if (!_kitLocked) gotoHomeScreen();
+      _next_refresh = 0;
+    }
+    if (consumeSquareRelease && (uint8_t(k) == KEY_KIT_SQUARE || k == KEY_KB_ENTER || k == ' ')) {
+      consumeSquareRelease = false;
+      k = 0;
+    }
+    if (_kitWakeKey && k) { _kitWakeKey = false; k = 0; }
+    if (_kitWakeKey && !techoKeyshieldPressed() && !k && int32_t(now - _kitBacklightUntil) >= 0)
+      _kitWakeKey = false;
+    techoKeyshieldSetBacklight(!_kitLocked && !_locked && int32_t(_kitBacklightUntil - now) > 0);
+    if (gesture.pollUp(now) && !_kitLocked) enqueueKey(checkDisplayOn(KEY_UP));
+    if (k) {
+      if (trackerOwnsKeys) {
+        enqueueKey(checkDisplayOn(uint8_t(k) == KEY_KIT_SQUARE ? KEY_ENTER : k));
+      } else if (uint8_t(k) == KEY_UP) {
+        if (gesture.cancel() && !_kitLocked) enqueueKey(checkDisplayOn(KEY_UP));
+        gesture.up(now);
+      } else {
+        if (gesture.cancel() && !_kitLocked) enqueueKey(checkDisplayOn(KEY_UP));
+        if (!_kitLocked) enqueueKey(checkDisplayOn(uint8_t(k) == KEY_KIT_SQUARE ? KEY_ENTER : k));
+      }
+    }
+
+#else
     if (k) {
       switch (k) {
       case KEY_UP:    enqueueKey(checkDisplayOn(KEY_UP));    break;
@@ -2001,6 +2067,7 @@ void UITask::loop() {
         break;
       }
     }
+#endif
   }
 #endif
 #if defined(BACKLIGHT_BTN)
@@ -2039,7 +2106,7 @@ void UITask::loop() {
   }
 
   if (_kq_head != _kq_tail) {
-#ifdef ZYGIS_EINK_PORTRAIT
+#if defined(ZYGIS_EINK_PORTRAIT) || defined(ZYGIS_KIT_UX)
     if (curr == splash && splash) {
       char key;
       if (dequeueKey(key)) splash->handleInput(key);
@@ -2056,7 +2123,16 @@ void UITask::loop() {
       // Apply the whole queued burst, then redraw once — N taps captured during
       // a blocking refresh become N navigation steps at the cost of one refresh.
       char k;
-      while (dequeueKey(k)) curr->handleInput(k == KEY_STEP ? curr->stepKey() : k);
+      while (dequeueKey(k)) {
+#ifdef ZYGIS_KIT_UX
+        if (_kitLocked) continue;
+        if (uint8_t(k) == KEY_HOME) {
+          if (curr != messages_screen || !curr->handleInput(k)) gotoHomeScreen();
+          continue;
+        }
+#endif
+        curr->handleInput(k == KEY_STEP ? curr->stepKey() : k);
+      }
       { uint32_t aoff = autoOffMillis(); if (aoff > 0) _auto_off = millis() + aoff; }  // extend auto-off timer
       // Note timing no longer depends on render cadence (TIMER1 IRQ advances
       // notes directly — see buzzer.cpp), so a redraw right after a keypress
@@ -2115,7 +2191,26 @@ void UITask::loop() {
         _next_refresh = millis() + ((SosScreen*)sos_screen)->renderStatus(*_display);
         _display->endFrame();
       }
-#ifdef ZYGIS_EINK_PORTRAIT
+#ifdef ZYGIS_KIT_UX
+    } else if (_kitLocked) {
+      if (refreshDue()) {
+        _display->startFrame();
+        _display->setColor(UIColor::primary_txt);
+        _display->setTextSize(2);
+        struct tm time = {};
+        char clock[8] = "--:--";
+        uint32_t now = rtc_clock.getCurrentTime();
+        if (localTm(now, tzHoursAt(*_node_prefs, now), time)) {
+          snprintf(clock, sizeof(clock), "%02u:%02u", unsigned(time.tm_hour), unsigned(time.tm_min));
+        }
+        _display->drawTextCentered(_display->width() / 2, _display->height() / 3, clock);
+        _display->setTextSize(1);
+        drawKitLockHint(*_display, _display->height() - 36);
+        _display->endFrame();
+        _next_refresh = millis() + 1000;
+      }
+#endif
+#if defined(ZYGIS_EINK_PORTRAIT) || defined(ZYGIS_KIT_UX)
     } else if (curr == splash && splash) {
       if (refreshDue()) {
         _display->startFrame();

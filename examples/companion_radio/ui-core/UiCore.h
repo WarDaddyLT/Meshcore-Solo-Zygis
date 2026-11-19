@@ -64,6 +64,18 @@ public:
     waypoints.begin(&locator);   // loads /waypoints
 #ifdef HIST_FLASH
     history_log.begin(prefs, &history);
+#ifdef ZYGIS_KIT_UX
+    for (int i = history.dmHistCount() - 1; i >= 0; --i) {
+      const auto& e = history.dmAtPos(history.dmHistPosNewest(i));
+      if (!e.incomingUnread || !history_log.kitUnread(e.conversation, e.arc_id)) continue;
+      ContactInfo contact;
+      if (!MessageHistory::contactByPrefix(e.prefix, contact) ||
+          kitConversationId(contact.id.pub_key, PUB_KEY_SIZE) != e.conversation) continue;
+      if (contact.type == ADV_TYPE_ROOM) ++_room_unread;
+      else dm_unread.onIncoming(contact.id.pub_key);
+    }
+    dm_unread.reconcile(history);
+#endif
 #endif
   }
 
@@ -175,10 +187,22 @@ public:
   uint8_t dmUnread(const uint8_t* pub_key) const  { return dm_unread.get(history, pub_key); }
   bool    dmUnreadOverflow(const uint8_t* pub_key) const { return dm_unread.overflow(pub_key); }
   bool    anyDMUnreadOverflow() const             { return dm_unread.anyOverflow(); }
-  void    clearDMUnread(const uint8_t* pub_key)   { dm_unread.clear(pub_key); }
+  void clearDMUnread(const uint8_t* pub_key) {
+    dm_unread.clear(pub_key);
+#ifdef ZYGIS_KIT_UX
+    history_log.markKitDirectRead(pub_key);
+#endif
+  }
   void    clearAllDMUnread()                      { dm_unread.clearAll(); }
   // Every conversation read: direct, channels, rooms.
-  void    markAllRead() { _room_unread = 0; dm_unread.clearAll(); history.clearAllChannelUnread(); }
+  void markAllRead() {
+    _room_unread = 0;
+    dm_unread.clearAll();
+    history.clearAllChannelUnread();
+#ifdef ZYGIS_KIT_UX
+    history_log.markKitAllRead();
+#endif
+  }
 #ifdef HIST_FLASH
   void    deleteHistory() { history_log.erase(); markAllRead(); }   // Settings > Messages > Delete history
 #endif
@@ -376,6 +400,20 @@ public:
                      const char* text) override {
     onMessageRecvEx(pkt, from, txt_type, sender_timestamp, nullptr, 0, text);
   }
+#ifdef ZYGIS_KIT_UX
+  static MessageSignal receivedSignal(const mesh::Packet* pkt) {
+    return {int16_t(radio_driver.getLastRSSI()), int8_t(pkt->getSNR() * 4)};
+  }
+
+  void addReceivedDm(const ContactInfo& from, const char* text, uint32_t timestamp, const mesh::Packet* pkt) {
+    bool viewing = _host->isViewingDM(from.id.pub_key);
+    history.addDMMsg(from.id.pub_key, false, text, timestamp, 0, 0, 0,
+                     pkt->path, pkt->path_len, receivedSignal(pkt));
+    if (viewing) _host->onViewedHistoryGrew(false);
+    dm_unread.afterInsert(history);
+  }
+#endif
+
   void onMessageRecvEx(mesh::Packet *pkt, const ContactInfo &from, uint8_t txt_type, uint32_t sender_timestamp,
                        const uint8_t* extra, int extra_len, const char* text) override {
     // we only want to show text messages on display, not cli data
@@ -383,6 +421,10 @@ public:
     // Only chats and rooms have a conversation on the device: text from a
     // repeater or sensor would ring with nothing to open (the app still gets it).
     if (from.type != ADV_TYPE_CHAT && from.type != ADV_TYPE_ROOM) return;
+#ifdef ZYGIS_KIT_UX
+    board.notifyLed(from.type == ADV_TYPE_ROOM ? TechoBoard::LedEvent::RoomMessage
+                                               : TechoBoard::LedEvent::PrivateMessage);
+#endif
     if (from.type == ADV_TYPE_ROOM && _room_unread < _queue_len) _room_unread++;
     if (from.type == ADV_TYPE_CHAT) dm_unread.onIncoming(from.id.pub_key);   // before the ring insert below
     UiEvent& ev = pushMessageArrived(from.type == ADV_TYPE_ROOM ? UIEventType::roomMessage : UIEventType::contactMessage,
@@ -394,7 +436,11 @@ public:
     // message fires the notification and reaches the app via the offline queue but
     // never shows when the room is opened directly on the device.
     if (from.type == ADV_TYPE_CHAT) {
+#ifdef ZYGIS_KIT_UX
+      addReceivedDm(from, text, sender_timestamp, pkt);
+#else
       addDMMsg(from.id.pub_key, false, text, sender_timestamp, 0, 0, 0, pkt->path, (uint8_t)pkt->path_len);
+#endif
     } else if (from.type == ADV_TYPE_ROOM) {
       // A room carries many guests, so prefix the post with its author so the UI
       // can attribute each line. The signed message's `extra` holds the sender's
@@ -409,7 +455,11 @@ public:
       } else {
         snprintf(labeled, sizeof(labeled), "%s", text);
       }
+#ifdef ZYGIS_KIT_UX
+      addReceivedDm(from, labeled, sender_timestamp, pkt);
+#else
       addDMMsg(from.id.pub_key, false, labeled, sender_timestamp, 0, 0, 0, pkt->path, (uint8_t)pkt->path_len);
+#endif
     }
     if (from.type == ADV_TYPE_CHAT) sosReply(from.name, text);
   }
@@ -427,7 +477,15 @@ public:
     // bubble on the left, counted unread).
     char quoted[MSG_TEXT_BUF];
     if (strncmp(text, "Me: ", 4) == 0) { snprintf(quoted, sizeof(quoted), "\"Me\"%s", text + 2); text = quoted; }
+#ifdef ZYGIS_KIT_UX
+    board.notifyLed(TechoBoard::LedEvent::ChannelMessage);
+    bool viewing = _host->isViewingChannel(channel_idx);
+    int pos = history.addChannelMsg(channel_idx, text, viewing, timestamp, pkt->path,
+                                    pkt->path_len, false, receivedSignal(pkt));
+    if (viewing && pos >= 0) _host->onViewedHistoryGrew(true);
+#else
     addChannelMsg(channel_idx, text, timestamp, pkt->path, (uint8_t)pkt->path_len);
+#endif
 #ifndef PRIVATE_STATUS_REPORTER
     pushMessageArrived(UIEventType::channelMessage, channel_details.name, channel_idx);
 #endif

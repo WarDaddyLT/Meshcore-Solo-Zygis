@@ -165,7 +165,7 @@ bool MyMesh::getRoomPassword(const uint8_t* pub_key, char* out_password, uint8_t
   RoomPwRec rec;
   bool found = false;
   while (f.read((uint8_t *)&rec, sizeof(rec)) == sizeof(rec)) {
-    if (memcmp(rec.key, pub_key, 4) == 0) {
+    if (memcmp(rec.key, pub_key, sizeof(rec.key)) == 0) {
       strncpy(out_password, rec.pw, max_len - 1);
       out_password[max_len - 1] = 0;
       found = true;
@@ -187,7 +187,7 @@ bool MyMesh::saveRoomPassword(const uint8_t* pub_key, const char* password) {
   if (rf) {
     RoomPwRec rec;
     while (count < MAX_SAVED_ROOM_PASSWORDS && rf.read((uint8_t *)&rec, sizeof(rec)) == sizeof(rec)) {
-      if (memcmp(rec.key, pub_key, 4) != 0) { // drop stale entry for this key -- replaced below
+      if (memcmp(rec.key, pub_key, sizeof(rec.key)) != 0) { // drop stale entry for this key -- replaced below
         recs[count++] = rec;
       }
     }
@@ -195,7 +195,7 @@ bool MyMesh::saveRoomPassword(const uint8_t* pub_key, const char* password) {
   }
 
   RoomPwRec new_rec;
-  memcpy(new_rec.key, pub_key, 4);
+  memcpy(new_rec.key, pub_key, sizeof(new_rec.key));
   strncpy(new_rec.pw, password, sizeof(new_rec.pw) - 1);
   new_rec.pw[sizeof(new_rec.pw) - 1] = 0;
 
@@ -227,7 +227,7 @@ void MyMesh::forgetRoomPassword(const uint8_t* pub_key) {
   RoomPwRec rec;
   bool removed = false;
   while (count < MAX_SAVED_ROOM_PASSWORDS && rf.read((uint8_t *)&rec, sizeof(rec)) == sizeof(rec)) {
-    if (memcmp(rec.key, pub_key, 4) == 0) {
+    if (memcmp(rec.key, pub_key, sizeof(rec.key)) == 0) {
       removed = true;
     } else {
       recs[count++] = rec;

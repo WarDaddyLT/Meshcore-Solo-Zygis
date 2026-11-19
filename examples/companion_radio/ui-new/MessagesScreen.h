@@ -4,6 +4,9 @@
 
 #include "NavView.h"   // navigate to a location shared inside a message
 #include "icons.h"     // scalable mini-icons (delivery markers)
+#ifdef ZYGIS_KIT_UX
+#include "KitDrafts.h"
+#endif
 #include "ChannelsView.h"  // on-device channel add/edit form (Channels tab)
 #include "../ui-core/BotConfig.h"   // which channel bot a channel pick is for
 
@@ -53,6 +56,92 @@ class MessagesScreen : public UIScreen {
 
   // KEYBOARD
   KeyboardWidget* _kb;
+#ifdef ZYGIS_KIT_UX
+  kit::DraftCache _kitDrafts;
+  int8_t _kitDraft = -1;
+  bool _kitDiscard = false;
+  bool _kitDiscardHome = false;
+  int _kitForgetRoom = -1;
+  uint32_t _kitDeleteId = 0;
+  bool _kitDeleteChannel = false;
+
+  void kitCompose(bool channel) {
+    _sending_to_channel = channel;
+    _reply_mode = false;
+    _kitDraft = -1;
+    ChannelDetails active;
+    if (!channel || the_mesh.getChannel(_sel_channel_idx, active)) {
+      _kitDraft = _kitDrafts.open(channel ? active.channel.secret : _sel_contact.id.pub_key);
+    }
+    char saved[kit::DraftCache::TEXT_LIMIT + 1] = {};
+    uint16_t length = 0, cursor = 0;
+    _kitDrafts.load(_kitDraft, saved, sizeof(saved), length, cursor);
+    _kb->begin(saved, kit::DraftCache::TEXT_LIMIT);
+    _kb->cursor_pos = min(int(cursor), _kb->len);
+    setComposePrompt();
+    _phase = KEYBOARD;
+  }
+
+  void renderKitConversation(DisplayDriver& d, bool channel) {
+    int count = channel ? chViewCount() : dmViewCount();
+    int selected = channel ? _hist_sel : _dm_hist_sel;
+    int pos = selected < 0 ? -1 : channel ? chViewPos(selected) : dmViewPos(selected);
+    ChannelDetails detail;
+    const char* title = channel && the_mesh.getChannel(_sel_channel_idx, detail)
+      ? detail.name : _sel_contact.name;
+    d.drawCenteredHeader(title);
+    const int lh = d.getLineHeight();
+    if (pos >= 0) {
+      char sender[40] = {};
+      const char* body = nullptr;
+      MessageSignal signal;
+      int hops;
+      if (channel) {
+        const ChHistEntry& e = _history.chAtPos(pos);
+        signal = e.signal;
+        hops = e.path_len & 63;
+        const char* colon = strstr(e.text, ": ");
+        size_t len = colon ? size_t(colon - e.text) : 0;
+        if (len >= sizeof(sender)) len = sizeof(sender) - 1;
+        memcpy(sender, e.text, len);
+        if (!strcmp(sender, "Me")) snprintf(sender, sizeof(sender), "%s", _task->getNodePrefs()->node_name);
+        body = colon ? colon + 2 : e.text;
+      } else {
+        const DmHistEntry& e = _history.dmAtPos(pos);
+        signal = e.signal;
+        hops = e.path_len & 63;
+        const char* name = e.outgoing ? _task->getNodePrefs()->node_name : _sel_contact.name;
+        body = dmDisplayParts(e, _sel_contact.type == ADV_TYPE_ROOM, name, sender, sizeof(sender));
+        if (e.outgoing) snprintf(sender, sizeof(sender), "%s", name);
+      }
+      int y = d.listStart() + 3;
+      d.drawTextEllipsized(3, y, d.width() - 12, sender);
+      const int lines = FullscreenMsgView::wrapLines(d, body, d.width() - 14, s_wrap_lines, 3);
+      for (int i = 0; i < lines; ++i) {
+        d.setCursor(3, y + (i + 1) * lh + 4);
+        d.print(s_wrap_lines[i]);
+      }
+      char route[30];
+      if (signal.rssi < 0) {
+        snprintf(route, sizeof(route), "%d hops  %d dBm", hops, signal.rssi);
+        d.drawTextEllipsized(3, y + 4 * lh + 7, d.width() - 6, route);
+        snprintf(route, sizeof(route), "SNR %.2f dB", signal.snrQuarterDb / 4.0);
+      } else {
+        snprintf(route, sizeof(route), "RX unavailable");
+      }
+      d.drawTextEllipsized(3, y + 5 * lh + 7, d.width() - 6, route);
+      if (count > 1) {
+        int height = 3 * lh + 14;
+        int bar = max(4, height / count);
+        d.fillRect(d.width() - 4, y, 1, height);
+        d.fillRect(d.width() - 5, y + (height - bar) * (count - 1 - selected) / (count - 1), 3, bar);
+      }
+    } else {
+      d.drawTextCentered(d.width() / 2, d.listStart() + 8, count ? "New message" : "No messages");
+    }
+    d.drawTextCentered(d.width() / 2, d.height() - lh - 4, "Mail: New message");
+  }
+#endif
 
   // Context menu (opened by KEY_CONTEXT_MENU in CHANNEL_PICK / CONTACT_PICK / histories)
   PopupMenu _ctx_menu;
@@ -740,6 +829,12 @@ class MessagesScreen : public UIScreen {
   // still in it, or the quick-message list -- so it can be sent again.
   // Alerts don't show over the keyboard, so there its field label says it.
   void afterSend(bool ok) {
+#ifdef ZYGIS_KIT_UX
+    if (ok && _kitDraft >= 0) {
+      _kitDrafts.clear(_kitDraft);
+      _kitDraft = -1;
+    }
+#endif
     if (!ok) {
       if (_phase == KEYBOARD) _kb->prompt = "Not sent";
       else _task->showAlert("Send failed", 1500);
@@ -841,6 +936,19 @@ class MessagesScreen : public UIScreen {
     _task->showAlert(alert, 800);
   }
 
+  void beginRoomPassword() {
+    _login_mode = true;
+    _kb->begin("", 15);
+#ifdef ZYGIS_KIT_UX
+    _kb->prompt = "Password (Mail: reveal)";
+    _kb->pin_kb_mask_enabled = true;
+#else
+    _kb->prompt = "Password";
+#endif
+    _kb->clearPlaceholders();
+    _phase = KEYBOARD;
+  }
+
   // Posting to a room requires a login handshake first (even with a blank
   // password), so get one under way instead of opening a history view that
   // would silently fail to send. Targets _sel_contact.
@@ -852,11 +960,7 @@ class MessagesScreen : public UIScreen {
       if (o != RoomSessions::OPEN_NOW) loginAlert(o == RoomSessions::LOGGING_IN);
       return;
     }
-    _login_mode = true;
-    _kb->begin("", 15); // room/repeater password: max 15 chars
-    _kb->prompt = "Password";
-    _kb->clearPlaceholders();   // {loc}/{time} are for messages, not a password
-    _phase = KEYBOARD;
+    beginRoomPassword();
   }
 
   // Flip a contact's/room's favourite flag and refresh the menu label. The list
@@ -1193,7 +1297,11 @@ public:
     _new_idx = _history.firstUnreadDm(key, _task->getDMUnread(key));
     _anchor_new = _new_idx >= 0;
     _task->clearDMUnread(key);
+#ifdef ZYGIS_KIT_UX
+    _dm_hist_sel = _new_idx >= 0 ? _new_idx : _history.dmHistCountForContact(key) ? 0 : -1;
+#else
     _dm_hist_sel = _new_idx;
+#endif
     _dm_hist_scroll = 0;
     _dm_fs.active = false;
   }
@@ -1284,6 +1392,9 @@ public:
     if (_seen_hi < b) b = _seen_hi;
     int remaining = _unread_at_entry - (b >= a ? b - a + 1 : 0);
     _history.setChUnread(_sel_channel_idx, (uint8_t)(remaining > 0 ? remaining : 0));
+#ifdef ZYGIS_KIT_UX
+    if (remaining <= 0) _task->core().history_log.markKitChannelRead(_sel_channel_idx);
+#endif
   }
 
   void reset() {
@@ -1509,6 +1620,24 @@ public:
     if (_nav_active) { renderNav(display); return 1000; }
     if (_task->core().hop_route.active()) { renderRoute(display); return 5000; }
 
+#ifdef ZYGIS_KIT_UX
+    if (!_ctx_menu.active && ((_phase == CHANNEL_HIST && !_fs.active) ||
+        (_phase == DM_HIST && !_dm_fs.active))) {
+      const bool channel = _phase == CHANNEL_HIST;
+      renderKitConversation(display, channel);
+      if (channel && _hist_sel >= 0) {
+        _hist_visible = 1;
+        _hist_scroll = _hist_sel;
+        updateChannelUnread();
+      }
+      return 1000;
+    }
+    if (_kitDeleteId || (_phase == KEYBOARD && _kitDiscard)) {
+      display.drawCenteredHeader(_kitDeleteId ? "Message" : "Draft");
+      _ctx_menu.render(display);
+      return 1000;
+    }
+#endif
     int lh      = display.getLineHeight();
     int item_h  = display.lineStep();
     int start_y = display.listStart();
@@ -2112,6 +2241,22 @@ public:
     return KEY_DOWN;
   }
 
+  static constexpr int listFirstFallback(int total) {
+#ifdef ZYGIS_KIT_UX
+    return 0;
+#else
+    return total - 1;
+#endif
+  }
+
+  static constexpr int listLastFallback(int total) {
+#ifdef ZYGIS_KIT_UX
+    return total - 1;
+#else
+    return 0;
+#endif
+  }
+
   bool handleInput(char c) override {
     // Channel Add/Edit form consumes all input while active.
     if (_ch_view.active()) return _ch_view.handleInput(c);
@@ -2126,6 +2271,87 @@ public:
       if (c == KEY_CANCEL) _task->core().hop_route.close();
       return true;
     }
+#ifdef ZYGIS_KIT_UX
+    if (uint8_t(c) == KEY_HOME && (_phase != KEYBOARD || _login_mode)) {
+      if (_login_mode) {
+        memset(_kb->buf, 0, sizeof(_kb->buf));
+        _kb->len = _kb->cursor_pos = 0;
+        _login_mode = false;
+      }
+      _kitDeleteId = 0;
+      _ctx_menu.active = false;
+      _task->gotoHomeScreen();
+      return true;
+    }
+    if (_kitDeleteId) {
+      auto result = _ctx_menu.handleInput(c);
+      if (result == PopupMenu::SELECTED && _ctx_menu.selectedIndex() == 0) {
+        if (_task->core().history_log.deleteKitMessage(_kitDeleteChannel, _kitDeleteId)) {
+          dropOlder();
+          if (_kitDeleteChannel) {
+            _hist_sel = chViewCount() ? 0 : -1;
+            _unread_at_entry = 0;
+          } else {
+            _dm_hist_sel = dmViewCount() ? 0 : -1;
+          }
+        } else {
+          _task->showAlert("Message could not be deleted", 2000);
+        }
+      }
+      if (result != PopupMenu::NONE) _kitDeleteId = 0;
+      return true;
+    }
+    if (_phase == KEYBOARD && !_login_mode) {
+      if (_kitDiscard) {
+        auto result = _ctx_menu.handleInput(c);
+        if (result == PopupMenu::SELECTED && _ctx_menu.selectedIndex() == 0) {
+          _kitDrafts.clear(_kitDraft);
+          _kitDraft = -1;
+          _phase = _sending_to_channel ? CHANNEL_HIST : DM_HIST;
+          if (_kitDiscardHome) _task->gotoHomeScreen();
+        }
+        if (result != PopupMenu::NONE) _kitDiscard = false;
+        return true;
+      }
+      if (c == KEY_CANCEL || uint8_t(c) == KEY_HOME) {
+        if (_kb->len) {
+          _kitDiscardHome = uint8_t(c) == KEY_HOME;
+          _kitDiscard = true;
+          _ctx_menu.beginConfirm("Discard draft?", "Discard");
+        } else {
+          _phase = _sending_to_channel ? CHANNEL_HIST : DM_HIST;
+          if (uint8_t(c) == KEY_HOME) _task->gotoHomeScreen();
+        }
+        return true;
+      }
+      if (c == KEY_ENTER || uint8_t(c) == KEY_CONTEXT_MENU) c = KEY_KB_ENTER;
+    }
+    if (!_ctx_menu.active && ((_phase == CHANNEL_HIST && !_fs.active) ||
+        (_phase == DM_HIST && !_dm_fs.active))) {
+      bool channel = _phase == CHANNEL_HIST;
+      if (uint8_t(c) == KEY_CONTEXT_MENU) { kitCompose(channel); return true; }
+      int& selection = channel ? _hist_sel : _dm_hist_sel;
+      int count = channel ? chViewCount() : dmViewCount();
+      if (c == '\b' && selection >= 0) {
+        const int pos = channel ? chViewPos(selection) : dmViewPos(selection);
+        if (pos >= 0) {
+          _kitDeleteId = channel ? _history.chAtPos(pos).arc_id : _history.dmAtPos(pos).arc_id;
+          _kitDeleteChannel = channel;
+          if (_kitDeleteId) _ctx_menu.beginConfirm("Delete message?", "Delete");
+        }
+        return true;
+      }
+      if (uint8_t(c) == KEY_UP && count && selection >= count - 1) {
+        turnOlder(channel);
+        return true;
+      }
+      if (uint8_t(c) == KEY_DOWN && selection <= 0) {
+        if (selection == 0) turnNewer(channel);
+        return true;
+      }
+      if (c == KEY_ENTER && selection < 0) { kitCompose(channel); return true; }
+    }
+#endif
     if (_phase == MODE_SELECT) {
       // Context menu (Mark-all-read) takes precedence while active.
       if (_ctx_menu.active) {
@@ -2202,14 +2428,15 @@ public:
             if (the_mesh.getContactByIdx(_sorted[_contact_sel], _sel_contact)) {
               int sel = _ctx_menu.selectedIndex();
               if (sel == 0) {
-                _login_mode = true;
-                _kb->begin("", 15); // room/repeater password: max 15 chars
-                _kb->prompt = "Password";
-                _kb->clearPlaceholders();   // {loc}/{time} are for messages, not a password
-                _phase = KEYBOARD;
+                beginRoomPassword();
               } else if (sel == _ctx_pin_idx) {
                 pinContactAction(_sel_contact);
                 if (_pin_picker_active) return true;   // rebuild below would close the submenu
+#ifdef ZYGIS_KIT_UX
+              } else if (sel == _kitForgetRoom) {
+                the_mesh.forgetRoomPassword(_sel_contact.id.pub_key);
+                _task->showAlert("Room password forgotten", 1800);
+#endif
               } else if (sel != _ctx_fav_idx) {
                 // Logout: only reachable when isRoomLoggedIn() added this item.
                 _task->core().rooms.logout(_sel_contact.id.pub_key);
@@ -2268,8 +2495,8 @@ public:
         return true;
       }
       // drawList() reclamps _contact_scroll from _contact_sel every render.
-      if (c == KEY_UP   && _num_contacts > 0) { _contact_sel = (_contact_sel > 0) ? _contact_sel - 1 : _num_contacts - 1; return true; }
-      if (c == KEY_DOWN && _num_contacts > 0) { _contact_sel = (_contact_sel < _num_contacts - 1) ? _contact_sel + 1 : 0; return true; }
+      if (c == KEY_UP   && _num_contacts > 0) { _contact_sel = (_contact_sel > 0) ? _contact_sel - 1 : listFirstFallback(_num_contacts); return true; }
+      if (c == KEY_DOWN && _num_contacts > 0) { _contact_sel = (_contact_sel < _num_contacts - 1) ? _contact_sel + 1 : listLastFallback(_num_contacts); return true; }
       if (c == KEY_ENTER && _num_contacts > 0) {
         if (the_mesh.getContactByIdx(_sorted[_contact_sel], _sel_contact)) {
           if (_pick_target) { commitPickTargetDM(_sel_contact); return true; }
@@ -2289,11 +2516,7 @@ public:
                 // password, so prompt for one now instead of picking an
                 // unusable target. Commits once submitted (see the KEYBOARD/
                 // _login_mode handler), whether or not login itself succeeds.
-                _login_mode = true;
-                _kb->begin("", 15); // room/repeater password: max 15 chars
-                _kb->prompt = "Password";
-                _kb->clearPlaceholders();
-                _phase = KEYBOARD;
+                beginRoomPassword();
                 return true;
               }
             }
@@ -2325,6 +2548,10 @@ public:
         _ctx_menu.addValueItem(_ctx_fav_item);
         _ctx_pin_idx = _ctx_fav_idx + 1;
         _ctx_menu.addItem(_ctx_pin_item);
+#ifdef ZYGIS_KIT_UX
+        _kitForgetRoom = _ctx_pin_idx + 1;
+        _ctx_menu.addItem("Forget password");
+#endif
         return true;
       }
       if (c == KEY_CONTEXT_MENU && _num_contacts > 0 && !_room_mode) {
@@ -2407,6 +2634,9 @@ public:
           if (sel == 0) {
             int cleared = (int)_history.chUnread(ch_idx);
             _history.setChUnread(ch_idx, 0);
+#ifdef ZYGIS_KIT_UX
+            _task->core().history_log.markKitChannelRead(ch_idx);
+#endif
             markReadAlert(cleared);
           } else if (sel == 4) {              // Scope
             if (chanctl::trackingLocked(ch_idx)) return true;
@@ -2460,8 +2690,8 @@ public:
       }
       // drawList() reclamps _channel_scroll from _channel_sel every render.
       { int total = channelPickTotal();
-        if (c == KEY_UP   && total > 0) { _channel_sel = (_channel_sel > 0) ? _channel_sel - 1 : total - 1; return true; }
-        if (c == KEY_DOWN && total > 0) { _channel_sel = (_channel_sel < total - 1) ? _channel_sel + 1 : 0; return true; }
+        if (c == KEY_UP   && total > 0) { _channel_sel = (_channel_sel > 0) ? _channel_sel - 1 : listFirstFallback(total); return true; }
+        if (c == KEY_DOWN && total > 0) { _channel_sel = (_channel_sel < total - 1) ? _channel_sel + 1 : listLastFallback(total); return true; }
       }
       if (c == KEY_ENTER && _channel_sel == _num_channels && !_pick_bot_channel) {
         int idx = findFreeChannelSlot();
@@ -2731,10 +2961,26 @@ public:
       }
 
     } else if (_phase == KEYBOARD) {
+#ifdef ZYGIS_KIT_UX
+      if (_login_mode && uint8_t(c) == KEY_CONTEXT_MENU) {
+        _kb->pin_kb_mask_enabled = !_kb->pin_kb_mask_enabled;
+        _kb->prompt = _kb->pin_kb_mask_enabled ? "Password (Mail: reveal)" : "Password (Mail: hide)";
+        return true;
+      }
+      if (_login_mode && c == KEY_ENTER) c = KEY_KB_ENTER;
+#endif
       auto res = _kb->handleInput(c);
+#ifdef ZYGIS_KIT_UX
+      if (!_login_mode && _kitDraft >= 0 && _kb->len <= kit::DraftCache::TEXT_LIMIT)
+        _kitDrafts.save(_kitDraft, _kb->buf, _kb->len, _kb->cursor_pos);
+#endif
       if (_login_mode) {
         if (res == KeyboardWidget::CANCELLED) {
           _login_mode = false;
+#ifdef ZYGIS_KIT_UX
+          memset(_kb->buf, 0, sizeof(_kb->buf));
+          _kb->len = _kb->cursor_pos = 0;
+#endif
           _phase = CONTACT_PICK;
         } else if (res == KeyboardWidget::DONE) {
           // Blank password is valid (guest/no-password rooms) — unlike normal
@@ -2742,6 +2988,10 @@ public:
           // password" attempt, so it isn't suppressed like an empty message is.
           _login_mode = false;
           startRoomLogin(_kb->buf);
+#ifdef ZYGIS_KIT_UX
+          memset(_kb->buf, 0, sizeof(_kb->buf));
+          _kb->len = _kb->cursor_pos = 0;
+#endif
           if (_pick_bot_room) { commitPickBotRoom(_sel_contact); return true; }
           _phase = CONTACT_PICK;
         }

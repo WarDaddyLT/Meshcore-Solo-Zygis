@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Common Žygis build, test, and Wio USB commands."""
+"""Common Žygis build, test, and USB commands."""
 
 import argparse
 import hashlib
@@ -143,6 +143,85 @@ def flash(args):
     print(f"Private tracking binding: {'ready' if after_ready else 'not ready'}")
 
 
+def kit_snapshot(port):
+    import serial
+
+    with serial.Serial(port.device, 115200, timeout=0.2, write_timeout=2) as connection:
+        def query(payload, reply):
+            return query_frame(connection, payload, reply)
+
+        info = query(bytes((22, 14)), 13)
+        if info[20:60].split(b"\0")[0] != b"LilyGo T-Echo Lite":
+            raise RuntimeError("Unexpected T-Echo Lite device response")
+        own = query(bytes([1]) + bytes(7) + b"Zygis kit check", 5)
+        channels = [query(bytes((31, slot)), 18) for slot in range(info[3])]
+        snapshot = hashlib.sha256(own[2:36] + own[44:])
+        for channel in channels:
+            snapshot.update(channel[1:2] + channel[2:34].split(b"\0")[0] + b"\0" + channel[34:])
+        return info[60:80].split(b"\0")[0].decode(), snapshot.digest()
+
+
+def flash_kit(args):
+    import serial
+    from serial.tools.list_ports import comports
+
+    def application_port():
+        return next((p for p in comports() if p.serial_number == args.serial
+                     and (p.vid, p.pid) == (0x239A, 0x8029)), None)
+
+    port = application_port()
+    if not port or not port.location:
+        raise RuntimeError("Connect the running T-Echo Lite Kit before flashing")
+    package = args.package.resolve(strict=True)
+    core = Path(os.environ.get("PLATFORMIO_CORE_DIR", Path.home() / ".platformio"))
+    uploader = core / "packages/tool-adafruit-nrfutil/adafruit-nrfutil.py"
+    if not uploader.is_file():
+        raise RuntimeError(f"PlatformIO uploader missing at {uploader}")
+    version, settings = kit_snapshot(port)
+    if version == args.expect_version and not args.force:
+        raise RuntimeError(f"{version} is already installed. Use --force to reflash it.")
+    print(f"Updating T-Echo Lite at {port.location} from {version}", flush=True)
+    # The bootloader can enumerate with a different product ID and serial
+    # number. Match the USB socket of the verified application only.
+    with serial.Serial(port.device, 1200, timeout=0.2) as touch:
+        touch.dtr = False
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        boot = next((p for p in comports() if p.location == port.location
+                     and p.vid == 0x239A and (p.pid != 0x8029 or p.serial_number != args.serial)), None)
+        if boot:
+            break
+        time.sleep(0.25)
+    else:
+        raise RuntimeError("The T-Echo Lite did not enter its serial DFU bootloader")
+    command = [sys.executable, str(uploader), "dfu", "serial",
+               "--package", str(package), "--port", boot.device,
+               "--baudrate", "115200", "--singlebank"]
+    with tempfile.TemporaryFile(mode="w+") as log:
+        result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=180)
+        log.seek(0)
+        output = log.read()
+    if result.returncode or "Device programmed." not in output:
+        raise RuntimeError("Kit DFU failed.\n" + output[-4000:])
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            port = application_port()
+            if port:
+                installed, after = kit_snapshot(port)
+                break
+        except (serial.SerialException, TimeoutError, RuntimeError):
+            pass
+        time.sleep(0.5)
+    else:
+        raise RuntimeError("DFU completed but the T-Echo Lite did not answer over USB")
+    if installed != args.expect_version:
+        raise RuntimeError(f"DFU completed but the kit reports {installed!r}")
+    if settings != after:
+        raise RuntimeError(f"Booted {installed}, but the identity, radio or channel snapshot differs")
+    print(f"DFU complete. Booted {installed}. Identity, radio and channels verified.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -160,6 +239,14 @@ def main():
     upload.add_argument("--serial", required=True, help="USB serial from devices")
     upload.add_argument("--expect-version", required=True, help="firmware name reported after reboot")
     upload.add_argument("--provision", action="store_true", help="allow settings to change during a storage migration")
+    kit = commands.add_parser("flash-kit", help="install a T-Echo Lite Kit application DFU ZIP")
+    kit.add_argument("package", type=Path)
+    kit.add_argument("--serial", required=True, help="USB serial of the running kit")
+    kit.add_argument("--expect-version", required=True, help="firmware name reported after reboot")
+    kit.add_argument("--force", action="store_true", help="reflash even if the same version is reported")
+    pair = commands.add_parser("test-kit-pair", help="exercise Kit tracking with a USB Wio peer")
+    pair.add_argument("kit_serial")
+    pair.add_argument("wio_serial")
     e2e = commands.add_parser("test-wio-pair", help="exercise tracking over LoRa on two USB Wios")
     e2e.add_argument("serials", nargs=2)
     e2e.add_argument("--identify", action="store_true", help="only read names and tracking configuration")
@@ -192,6 +279,12 @@ def main():
         print(f"Firmware: {version}. Private tracking binding: {'ready' if ready else 'not ready'}.")
     elif args.command == "flash-wio":
         flash(args)
+    elif args.command == "flash-kit":
+        flash_kit(args)
+    elif args.command == "test-kit-pair":
+        from zygis_kit_pair import smoke
+
+        smoke(args.kit_serial, args.wio_serial)
     elif args.command == "test-wio-pair":
         from zygis_wio_pair import test_pair
 
