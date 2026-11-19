@@ -383,6 +383,9 @@ public:
   bool useImperial() const { return _node_prefs && _node_prefs->units_imperial; }
   uint16_t getBattMilliVolts() const { return _batt_mv > 0 ? _batt_mv : UITaskBase::getBattMilliVolts(); }
   void gotoHomeScreen() { setCurrScreen(home); }
+#ifdef ZYGIS_KIT_UX
+  void gotoKitQuickMessages();
+#endif
   void gotoSettingsScreen();
   void gotoMessagesScreen();
 #if defined(SIMPSON)

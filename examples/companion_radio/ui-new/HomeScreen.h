@@ -135,6 +135,7 @@ class HomeScreen : public UIScreen {
   uint8_t _fav_sel = 0;
 #ifdef ZYGIS_KIT_UX
   bool _kitCarousel = true;
+  bool _kitQuickPanel = false;
   bool _kitAdvertReview = false;
   uint8_t _kitSelected = 0;    // Messages, then the existing Solo page order.
 #endif
@@ -334,8 +335,12 @@ class HomeScreen : public UIScreen {
       if (sensors.getLocationProvider()) add("GPS", Q_SWITCH, QA_GPS, _task->getGPSState() ? 1 : 0);
 #endif
     } else if (page == QUICK_MSG) {
+#ifdef ZYGIS_KIT_UX
+      n += recentChats(rows, quickFit());
+#else
       add("All messages", Q_MORE, QA_MORE, 0);
       n += recentChats(rows + n, quickFit() - 1);
+#endif
     } else if (page == BLUETOOTH) {
       const bool on = _task->isBluetoothEnabled();
       add("Bluetooth", Q_SWITCH, QA_BT, on ? 1 : 0);
@@ -512,6 +517,9 @@ class HomeScreen : public UIScreen {
   }
 
   bool isPageVisible(int page) const {
+#ifdef ZYGIS_KIT_UX
+    if (page == QUICK_MSG) return false;
+#endif
     int bit = pageBit(page);
     if (bit < 0) return true;
     uint16_t mask = (_node_prefs && _node_prefs->home_pages_mask) ? _node_prefs->home_pages_mask : NodePrefs::HP_ALL;
@@ -1409,8 +1417,40 @@ public:
 #ifdef ZYGIS_KIT_UX
   void onShow() override {
     _kitCarousel = true;
+    _kitQuickPanel = false;
     if (_kitAdvertReview) _tile_menu.active = false;
     _kitAdvertReview = false;
+  }
+
+  void showKitQuickMessages() {
+    _kitCarousel = false;
+    _kitQuickPanel = true;
+    _quick_sel = 0;
+  }
+
+  int renderKitQuickMessages(DisplayDriver& d) {
+    d.setTextSize(1);
+    d.setColor(UIColor::primary_txt);
+    d.drawCenteredHeader("Quick messages");
+    QRow rows[QUICK_MAX];
+    int count = buildQuick(QUICK_MSG, rows);
+    if (!count) {
+      d.drawTextCentered(d.width() / 2, d.listStart(), "No recent chats");
+      return 1000;
+    }
+    const int result = drawQuickPanel(d, d.listStart(), rows, count);
+    return result > 0 ? result : 1000;
+  }
+
+  void handleKitQuickMessages(char key) {
+    if (key == KEY_CANCEL) { _task->gotoMessagesScreen(); return; }
+    QRow rows[QUICK_MAX];
+    int count = buildQuick(QUICK_MSG, rows);
+    if (count <= 0) return;
+    if (_quick_sel >= count) _quick_sel = count - 1;
+    if (uint8_t(key) == KEY_UP && _quick_sel > 0) --_quick_sel;
+    else if (uint8_t(key) == KEY_DOWN && _quick_sel + 1 < count) ++_quick_sel;
+    else if (key == KEY_ENTER) quickAct(QUICK_MSG, rows[_quick_sel]);
   }
 
   static const char* kitPageLabel(int page) {
@@ -1526,6 +1566,7 @@ public:
 
   int render(DisplayDriver& display) override {
 #ifdef ZYGIS_KIT_UX
+    if (_kitQuickPanel) return renderKitQuickMessages(display);
     if (_kitCarousel && _page != LOCK) return renderKitCarousel(display);
 #endif
     // Ensure current page is visible (after a settings change, or at the start
@@ -1832,6 +1873,7 @@ public:
 
   bool handleInput(char c) override {
 #ifdef ZYGIS_KIT_UX
+    if (_kitQuickPanel) { handleKitQuickMessages(c); return true; }
     if (_kitAdvertReview) {
       auto result = _tile_menu.handleInput(c);
       if (result == PopupMenu::SELECTED && _tile_menu.selectedIndex() == 0) sendManualAdvert();

@@ -35,5 +35,10 @@ inline void drawKitLockHint(DisplayDriver& d, int y) {
   d.fillRect(x + 18, y + 6, 5, 2);
   d.drawRect(x + 26, y, 14, 14);
   d.drawRect(x + 30, y + 4, 6, 6);
-  d.drawTextCentered(cx, y + 18, "Press Up then Square");
+  if (d.getTextWidth("Press Up then Square") <= d.width() - 4) {
+    d.drawTextCentered(cx, y + 18, "Press Up then Square");
+  } else {
+    d.drawTextCentered(cx, y + 18, "Press Up then");
+    d.drawTextCentered(cx, y + 18 + d.getLineHeight(), "Square");
+  }
 }

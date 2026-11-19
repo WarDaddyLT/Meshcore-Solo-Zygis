@@ -311,6 +311,9 @@ private:
   void buildSections() {
     int cur = -1;
     for (int i = 0; i < (int)Count; i++) {
+#ifdef ZYGIS_KIT_UX
+      if (i == HOME_QUICK_MSG) continue;
+#endif
       if (isSection(i)) {
         if (++cur >= NUM_SECTIONS) break;
         _sec_header[cur] = (uint8_t)i;

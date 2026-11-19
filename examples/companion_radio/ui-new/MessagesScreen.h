@@ -25,6 +25,11 @@ class MessagesScreen : public UIScreen {
 
   // MODE_SELECT
   int _mode_sel;  // 0=Direct, 1=Channel, 2=Room Servers
+#ifdef ZYGIS_KIT_UX
+  static constexpr int MODE_COUNT = 4;
+#else
+  static constexpr int MODE_COUNT = 3;
+#endif
 
   // CONTACT_PICK
   int _contact_sel, _contact_scroll;
@@ -1649,15 +1654,19 @@ public:
       if (_pick_fav_slot >= 0) snprintf(hdr, sizeof(hdr), "Pin slot %d", _pick_fav_slot + 1);
       else                     snprintf(hdr, sizeof(hdr), "Messages");
       drawScreenHeader(display, hdr, -1, 0, true, _ctx_menu.active);
-      const char* opts[] = { "Direct message", "Channels", "Room Servers" };
-      int badges[3] = {
+      const char* opts[MODE_COUNT] = { "Direct message", "Channels", "Room Servers"
+#ifdef ZYGIS_KIT_UX
+        , "Quick messages"
+#endif
+      };
+      int badges[MODE_COUNT] = {
         getDMUnreadTotal(),
         _task->getChannelUnreadCount(),
         _task->getRoomUnreadCount()
       };
       // Rooms have no local ring to overflow the same way (see UITask::getAnyUnreadOverflow).
-      bool overflow[3] = { _task->getAnyDMUnreadOverflow(), anyChannelUnreadOverflow(), false };
-      for (int i = 0; i < 3; i++) {
+      bool overflow[MODE_COUNT] = { _task->getAnyDMUnreadOverflow(), anyChannelUnreadOverflow(), false };
+      for (int i = 0; i < MODE_COUNT; i++) {
         int y = start_y + i * item_h;
         bool sel = (i == _mode_sel);
         display.drawSelectionRow(0, y - 1, display.width(), item_h - 1, sel);
@@ -2373,8 +2382,14 @@ public:
         return true;
       }
       if (c == KEY_CANCEL) { _task->gotoHomeScreen(); return true; }
-      if (c == KEY_UP)   { _mode_sel = (_mode_sel > 0) ? _mode_sel - 1 : 2; return true; }
-      if (c == KEY_DOWN) { _mode_sel = (_mode_sel < 2) ? _mode_sel + 1 : 0; return true; }
+      if (c == KEY_UP)   { _mode_sel = (_mode_sel > 0) ? _mode_sel - 1 : listFirstFallback(MODE_COUNT); return true; }
+      if (c == KEY_DOWN) { _mode_sel = (_mode_sel < MODE_COUNT - 1) ? _mode_sel + 1 : listLastFallback(MODE_COUNT); return true; }
+#ifdef ZYGIS_KIT_UX
+      if (_mode_sel == 3 && (c == KEY_ENTER || uint8_t(c) == KEY_CONTEXT_MENU)) {
+        _task->gotoKitQuickMessages();
+        return true;
+      }
+#endif
       if (c == KEY_CONTEXT_MENU) {
         // PopupMenu stores the title pointer verbatim — use static strings.
         static const char* MODE_TITLES[] = { "DM options", "Channel options", "Room options" };

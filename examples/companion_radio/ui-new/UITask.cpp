@@ -737,6 +737,13 @@ bool UITask::isMelodyPlaying() {
 #endif
 }
 
+#ifdef ZYGIS_KIT_UX
+void UITask::gotoKitQuickMessages() {
+  setCurrScreen(home);
+  static_cast<HomeScreen*>(home)->showKitQuickMessages();
+}
+#endif
+
 void UITask::gotoMessagesScreen() {
   ((MessagesScreen*)messages_screen)->reset();
   setCurrScreen(messages_screen);
@@ -2205,7 +2212,8 @@ void UITask::loop() {
         }
         _display->drawTextCentered(_display->width() / 2, _display->height() / 3, clock);
         _display->setTextSize(1);
-        drawKitLockHint(*_display, _display->height() - 36);
+        const int hintLines = _display->getTextWidth("Press Up then Square") > _display->width() - 4 ? 2 : 1;
+        drawKitLockHint(*_display, _display->height() - 23 - hintLines * _display->getLineHeight());
         _display->endFrame();
         _next_refresh = millis() + 1000;
       }

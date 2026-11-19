@@ -200,6 +200,7 @@ carousel. Press Up and then the center Square key to show the clock-only
 screen. Repeat the sequence to return to the carousel. The keypad illuminates
 during input and goes dark after inactivity and during the clock lock.
 
+Open **Messages → Quick messages** for recent conversation shortcuts.
 Mail opens a composer in the current conversation. No/X opens a message
 deletion confirmation in a conversation and backspaces while typing. The
 confirmation starts on Cancel. The optional Keep messages setting retains up

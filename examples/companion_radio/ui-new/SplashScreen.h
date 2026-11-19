@@ -52,7 +52,7 @@ public:
 
   int render(DisplayDriver& display) override {
 #ifdef ZYGIS_KIT_UX
-    drawKitBoot(display, 5, "Ready - press a key");
+    drawKitBoot(display, 5, "Press a key");
     return 1000;
 #endif
 #ifdef ZYGIS_OLED_SPLASH
