@@ -15,7 +15,7 @@ def empty_slot(radio):
     raise RuntimeError("No empty slot for a temporary kit test channel")
 
 
-def smoke(kit_serial, peer_serial):
+def smoke(kit_serial, peer_serial, *, on_kit_message=None):
     import serial
     from serial.tools.list_ports import comports
 
@@ -68,10 +68,14 @@ def smoke(kit_serial, peer_serial):
         cleanup.callback(restore_binding)
         require(kit.cli(f"status channel {kit.slot}").startswith("Status channel:"), "Temporary binding failed")
         require(kit.cli("verify").startswith("READY:"), "Temporary kit binding failed verification")
+        if on_kit_message is not None:
+            on_kit_message(kit, False)
         for sender, receiver in ((peer, kit), (kit, peer)):
             message = f"Žygis kit test {nonce}"
             sender.send(message)
             wait_message(receiver, sender, lambda body: body == message, "exact UTF-8 channel message")
+            if receiver is kit and on_kit_message is not None:
+                on_kit_message(kit, True)
         print("PASS two-way exact UTF-8 channel messaging", flush=True)
 
         exchange(peer, kit, "!power", lambda body: body.startswith("Power saving "))

@@ -86,6 +86,7 @@ class UITask : public UITaskBase, public UiCoreHost {
 #endif
   unsigned long _next_refresh, _auto_off;
 #ifdef ZYGIS_KIT_UX
+  void toggleKitClockLock();
   bool _kitLocked = false;
   bool _kitWakeKey = false;
   uint32_t _kitKeyActivity = 0;

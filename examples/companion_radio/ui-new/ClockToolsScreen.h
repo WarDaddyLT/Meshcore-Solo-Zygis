@@ -418,6 +418,13 @@ public:
 
   ClockToolsScreen(UITask* task, NodePrefs* prefs) : _task(task), _prefs(prefs) {}
 
+#if defined(SOLO_TEST_HOOKS) && defined(ZYGIS_KIT_UX)
+  const char* kitTestView() const {
+    static const char* const names[] = {"menu", "alarm", "timer", "stopwatch", "calendar"};
+    return names[_view];
+  }
+#endif
+
   void onShow() override {
     _view = V_MENU; _sel = 0; _scroll = 0;
     _timer_cur = 0;

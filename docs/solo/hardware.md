@@ -191,13 +191,14 @@ target keeps the Solo T-Echo Lite application and ExtraFS boundaries. The
 updater checks the connected board identity before performing an application
 update and compares the identity, radio settings and channel slots after reboot.
 
-The e-paper splash shows the Žygis emblem and WarDaddy credit with live startup
-progress. At Ready, press a key to enter the carousel. The carousel uses the
+The e-paper splash places the Žygis emblem to the left of the wordmark.
+The underlined WarDaddy credit sits above the live startup progress bar. At Ready, press a key to enter the carousel. The carousel uses the
 AIDAS9 32×32 side and 48×48 center icon assets or matching Font Awesome Free
 bitmaps along with the Žygis status row and menu destinations. Up and Down move
 through the carousel. Center selects, Esc goes back, and Home opens the
-carousel. Press Up and then the center Square key to show the clock-only
-screen. Repeat the sequence to return to the carousel. The keypad illuminates
+carousel. Clock opens Solo’s Alarm, Timer, Stopwatch and Calendar submenu. Press Up
+and then the center Square key to lock the kit and show Solo’s clock, the date
+and the unread-message badge. Repeat the sequence to return to the carousel. The keypad illuminates
 during input and goes dark after inactivity and during the clock lock.
 
 Open **Messages → Quick messages** for recent conversation shortcuts.
@@ -223,3 +224,9 @@ two-radio test uses a temporary private channel on each radio. It restores
 the kit's radio settings and tracking binding after the test. Use
 `status channel clear` through the local USB CLI to clear a kit's tracking
 binding.
+
+For USB menu checks, build the kit with `SOLO_TEST_HOOKS` in a separate
+PlatformIO build directory and run `scripts/zygis_kit_menus.py --help` with
+the PlatformIO Python. The bench run exercises navigation and writes screen
+captures and a result log. The optional second USB radio verifies the unread
+badge with a real LoRa message. Restore the standard firmware after the run.

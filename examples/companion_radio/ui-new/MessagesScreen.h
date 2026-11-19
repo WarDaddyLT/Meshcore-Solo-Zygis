@@ -2250,6 +2250,20 @@ public:
     return KEY_DOWN;
   }
 
+#if defined(SOLO_TEST_HOOKS) && defined(ZYGIS_KIT_UX)
+  const char* kitTestView() const {
+    switch (_phase) {
+      case CONTACT_PICK: return _room_mode ? "rooms" : "direct";
+      case CHANNEL_PICK: return "channels";
+      case CHANNEL_HIST: return "channel-history";
+      case DM_HIST: return "direct-history";
+      case MSG_PICK: return "saved-text";
+      case KEYBOARD: return "keyboard";
+      default: return "menu";
+    }
+  }
+#endif
+
   static constexpr int listFirstFallback(int total) {
 #ifdef ZYGIS_KIT_UX
     return 0;

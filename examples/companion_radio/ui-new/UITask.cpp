@@ -738,6 +738,16 @@ bool UITask::isMelodyPlaying() {
 }
 
 #ifdef ZYGIS_KIT_UX
+void UITask::toggleKitClockLock() {
+  extern void techoKeyshieldSetBacklight(bool);
+  _kitLocked = !_kitLocked;
+  _kq_head = _kq_tail = 0;
+  techoKeyshieldSetBacklight(false);
+  _kitBacklightUntil = millis();
+  if (!_kitLocked) gotoHomeScreen();
+  _next_refresh = 0;
+}
+
 void UITask::gotoKitQuickMessages() {
   setCurrScreen(home);
   static_cast<HomeScreen*>(home)->showKitQuickMessages();
@@ -940,6 +950,9 @@ MyMesh::Listener* UITask::meshListener() { return _core; }
 
 // On screen: a conversation left open under the lock or a dark display isn't read.
 bool UITask::messagesInView() const {
+#ifdef ZYGIS_KIT_UX
+  if (_kitLocked) return false;
+#endif
   return curr == messages_screen && _display && _display->isOn() && !_locked;
 }
 bool UITask::isViewingChannel(uint8_t channel_idx) {
@@ -1058,7 +1071,7 @@ void UITask::onMessageArrived(const UiEvent& ev) {
 
   // No toast when the message lands in the thread that is open on screen:
   // it already shows up there, and the box would only cover it.
-  bool in_view = curr == messages_screen && _display && _display->isOn() && !_locked &&
+  bool in_view = messagesInView() &&
                  ((ev.kind == UIEventType::contactMessage && ev.flag && isViewingDM(ev.key)) ||
                   (ev.kind == UIEventType::channelMessage && ev.idx >= 0 && isViewingChannel((uint8_t)ev.idx)));
   const uint8_t style = _node_prefs ? _node_prefs->msg_alert : NodePrefs::MSG_ALERT_NORMAL;
@@ -2026,13 +2039,8 @@ void UITask::loop() {
     if (press && press != 31 && press != 1 && consumeSquareRelease)
       consumeSquareRelease = false;
     if (!trackerOwnsKeys && !_kitWakeKey && (press == 31 || press == 1) && gesture.square(now)) {
-      _kitLocked = !_kitLocked;
-      _kq_head = _kq_tail = 0;
       consumeSquareRelease = true;
-      techoKeyshieldSetBacklight(false);
-      _kitBacklightUntil = now;
-      if (!_kitLocked) gotoHomeScreen();
-      _next_refresh = 0;
+      toggleKitClockLock();
     }
     if (consumeSquareRelease && (uint8_t(k) == KEY_KIT_SQUARE || k == KEY_KB_ENTER || k == ' ')) {
       consumeSquareRelease = false;
@@ -2202,18 +2210,7 @@ void UITask::loop() {
     } else if (_kitLocked) {
       if (refreshDue()) {
         _display->startFrame();
-        _display->setColor(UIColor::primary_txt);
-        _display->setTextSize(2);
-        struct tm time = {};
-        char clock[8] = "--:--";
-        uint32_t now = rtc_clock.getCurrentTime();
-        if (localTm(now, tzHoursAt(*_node_prefs, now), time)) {
-          snprintf(clock, sizeof(clock), "%02u:%02u", unsigned(time.tm_hour), unsigned(time.tm_min));
-        }
-        _display->drawTextCentered(_display->width() / 2, _display->height() / 3, clock);
-        _display->setTextSize(1);
-        const int hintLines = _display->getTextWidth("Press Up then Square") > _display->width() - 4 ? 2 : 1;
-        drawKitLockHint(*_display, _display->height() - 23 - hintLines * _display->getLineHeight());
+        static_cast<HomeScreen*>(home)->drawKitClockLock(*_display);
         _display->endFrame();
         _next_refresh = millis() + 1000;
       }
@@ -3037,6 +3034,17 @@ bool UITask::testCli(const char* cmd, char* reply, int n) {
     snprintf(reply, n, "Error, key up/down/left/right/enter/cancel/next/prev/select/home/menu [long]");
     return true;
   }
+#ifdef ZYGIS_KIT_UX
+  if (!strcmp(cmd, "kit lock")) {
+    toggleKitClockLock();
+    snprintf(reply, n, "OK");
+    return true;
+  }
+  if (!strcmp(cmd, "kit selection")) {
+    snprintf(reply, n, "%s", static_cast<HomeScreen*>(home)->kitTestSelection());
+    return true;
+  }
+#endif
   if (!strcmp(cmd, "ui")) {
     const struct { UIScreen* s; const char* name; } SCREENS[] = {
       { splash, "splash" }, { home, "home" }, { settings, "settings" }, { messages_screen, "messages" },
@@ -3057,7 +3065,21 @@ bool UITask::testCli(const char* cmd, char* reply, int n) {
       const uint8_t pg = ((HomeScreen*)home)->page();
       snprintf(where, sizeof(where), "home/%s", pg < sizeof(PAGES) / sizeof(PAGES[0]) ? PAGES[pg] : "?");
     }
-    snprintf(reply, n, "> %s|%s|%d|%s|%u", where, alertShowing() ? _alert : "-", _locked ? 1 : 0,
+    bool locked = _locked;
+#ifdef ZYGIS_KIT_UX
+    if (_kitLocked) {
+      snprintf(where, sizeof(where), "kit/lock");
+      locked = true;
+    } else if (curr == home) {
+      const char* page = static_cast<HomeScreen*>(home)->kitTestPage();
+      snprintf(where, sizeof(where), "home/%s", page ? page : "carousel");
+    } else if (curr == clock_tools) {
+      snprintf(where, sizeof(where), "clock/%s", static_cast<ClockToolsScreen*>(clock_tools)->kitTestView());
+    } else if (curr == messages_screen) {
+      snprintf(where, sizeof(where), "messages/%s", static_cast<MessagesScreen*>(messages_screen)->kitTestView());
+    }
+#endif
+    snprintf(reply, n, "> %s|%s|%d|%s|%u", where, alertShowing() ? _alert : "-", locked ? 1 : 0,
              _display && _display->isOn() ? "on" : "off", (unsigned)_alert_seq);
     return true;
   }

@@ -1065,18 +1065,19 @@ public:
                               _node_prefs->alarm_hour, _node_prefs->alarm_min);
   }
 
-  void drawClockPage(DisplayDriver& d, uint32_t unix_ts) {
+  void drawClockPage(DisplayDriver& d, uint32_t unix_ts, int topInset = 0, int bottomInset = 0) {
+    const bool lockLayout = bottomInset > 0;
     struct tm ti;
     localTm(unix_ts, tzHoursAt(_node_prefs, unix_ts), ti);
     const bool h12 = _node_prefs && _node_prefs->clock_12h;
     const bool show_sec = !Features::IS_EINK && (!_node_prefs || !_node_prefs->clock_hide_seconds);
-    const int W = d.width(), H = d.height();
+    const int W = d.width(), H = d.height() - bottomInset;
     d.setColor(UIColor::primary_txt);
     d.setTextSize(1);
     const int lh = d.getLineHeight();
 
     uint8_t fields[3];
-    const int nf = clockFields(fields);
+    const int nf = lockLayout ? 0 : clockFields(fields);
 
     // The month under the date, where it fits: a tall screen (portrait
     // e-ink), or the 4.2" landscape one with the clock moved to the top.
@@ -1084,15 +1085,15 @@ public:
     const int cal_h = calendar::height(d, ti);
     bool cal = false;
     int date_y;
-    if (d.height() > d.width()) {   // portrait e-ink: stacked digits
+    if (!lockLayout && d.height() > d.width()) {   // portrait e-ink: stacked digits
       date_y = drawClockTall(d, lh / 2, &ti, h12);
       cal = true;
     } else {
       const BigClock bc = bigClockSize(d);
       const int bar = 3 * bc.sc / 2;              // the seconds bar and its gaps
       const int block = bc.h + bar + 1 + lh;
-      cal = bc.sc + block + lh / 2 + 2 + cal_h <= H - fields_h;
-      const int y = nf || cal ? bc.sc : (H - block) / 2;
+      cal = !lockLayout && bc.sc + block + lh / 2 + 2 + cal_h <= H - fields_h;
+      const int y = nf || cal ? bc.sc : topInset + max(0, (H - topInset - block) / 2);
       drawBigClock(d, W / 2, y, &ti, h12, bc.sc);
       const int bar_y = y + bc.h + bar / 2 + 1;
       if (show_sec) {   // fills over the minute: dotted track, solid part
@@ -1422,6 +1423,30 @@ public:
     _kitAdvertReview = false;
   }
 
+  void drawKitClockLock(DisplayDriver& d) {
+    d.setTextSize(1);
+    d.setColor(UIColor::primary_txt);
+    const int lh = d.getLineHeight();
+    const int hintLines = kitLockHintWraps(d) ? 2 : 1;
+    const int hintHeight = 23 + hintLines * lh;
+    const int unread = _task->getChannelUnreadCount() + _task->getDMUnreadTotal() + _task->getRoomUnreadCount();
+    if (unread > 0) {
+      const int badgeX = d.width() - 4;
+      const int badgeW = d.drawUnreadBadge(badgeX, 4, unread, false, _task->getAnyUnreadOverflow());
+      const int scale = miniIconScale(d);
+      miniIconDrawTop(d, badgeX - badgeW - (ICON_MAIL.w + 2) * scale,
+                      4 + (lh - ICON_MAIL.h * scale) / 2, ICON_MAIL);
+    }
+
+    const uint32_t now = _rtc->getCurrentTime();
+    if (now >= 1000000000UL) {
+      drawClockPage(d, now, lh + 6, hintHeight + 3);
+    } else {
+      d.drawTextCentered(d.width() / 2, (lh + 6 + d.height() - hintHeight) / 2 - lh / 2, "No time sync");
+    }
+    drawKitLockHint(d, d.height() - hintHeight);
+  }
+
   void showKitQuickMessages() {
     _kitCarousel = false;
     _kitQuickPanel = true;
@@ -1537,6 +1562,21 @@ public:
     return 1000;
   }
 
+#ifdef SOLO_TEST_HOOKS
+  const char* kitTestPage() const {
+    if (_kitQuickPanel) return "quick";
+    if (_kitAdvertReview) return "advert-review";
+    if (!_kitCarousel) return kitPageLabel(_page);
+    return nullptr;
+  }
+
+  const char* kitTestSelection() const {
+    int order[Count];
+    int count = buildVisibleOrder(order);
+    return kitPageLabel(_kitSelected && _kitSelected <= count ? order[_kitSelected - 1] : -1);
+  }
+#endif
+
   bool kitCarouselInput(char c) {
     if (!_kitCarousel || _page == LOCK) {
       if (c == KEY_CANCEL && !_tile_menu.active && !_quick_edit && _page != LOCK) {
@@ -1551,8 +1591,11 @@ public:
     if (uint8_t(c) == KEY_UP || uint8_t(c) == KEY_DOWN) {
       _kitSelected = (_kitSelected + (uint8_t(c) == KEY_UP ? count - 1 : 1)) % count;
     } else if (c == KEY_ENTER || c == KEY_SELECT) {
-      if (!_kitSelected) _task->gotoMessagesScreen();
-      else {
+      if (!_kitSelected) {
+        _task->gotoMessagesScreen();
+      } else if (order[_kitSelected - 1] == CLOCK) {
+        _task->gotoClockTools();
+      } else {
         _page = order[_kitSelected - 1];
         _quick_sel = 0;
         _kitCarousel = false;
