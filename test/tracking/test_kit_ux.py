@@ -50,7 +50,39 @@ def test_icons():
     assert len(per_page) == 10
     assert all(sizes == {32, 48} for sizes in per_page.values())
 
+def test_companion_read_state():
+    core = (UI.parent / "ui-core/UiCore.h").read_text()
+    method = re.search(r"  void onQueueSizeChanged\(.*?^  }", core, re.MULTILINE | re.DOTALL)[0]
+    source = """
+#include <cassert>
+struct Queue {
+  void markAllRead() { ++marks; }
+  int _queue_len = 0;
+  int marks = 0;
+""" + method.replace(" override", "") + """
+};
+int main() {
+  Queue queue;
+  queue.onQueueSizeChanged(1);
+  queue.onQueueSizeChanged(0);
+  assert(queue._queue_len == 0);
+#ifdef ZYGIS_KIT_UX
+  assert(queue.marks == 0);
+#else
+  assert(queue.marks == 1);
+#endif
+}
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        src, exe = Path(tmp) / "unread.cpp", Path(tmp) / "unread"
+        src.write_text(source)
+        for flags in ([], ["-DZYGIS_KIT_UX"]):
+            subprocess.run(["c++", "-std=c++17", *flags, str(src), "-o", str(exe)], check=True)
+            subprocess.run([str(exe)], check=True)
+
+
 if __name__ == "__main__":
     test_gesture()
     test_icons()
-    print("Kit keypad timing and ten pairs of monochrome icon canvases passed")
+    test_companion_read_state()
+    print("Kit keypad timing, monochrome icons and local unread state passed")

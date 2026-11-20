@@ -358,7 +358,11 @@ public:
 
   void onQueueSizeChanged(int msgcount) override {
     _queue_len = msgcount;
-    if (msgcount == 0) markAllRead();   // the app drained the queue: nothing is unread any more
+#ifndef ZYGIS_KIT_UX
+    if (msgcount == 0) markAllRead();
+#endif
+    // On the kit, the companion queue and the local inbox have separate
+    // read state. USB or BLE delivery leaves the lock badge intact.
   }
 
   void onACKRecv(uint32_t ack_crc) override { history.markDmDelivered(ack_crc); }

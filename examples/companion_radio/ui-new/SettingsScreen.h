@@ -633,8 +633,6 @@ private:
 #ifdef PRIVATE_STATUS_REPORTER
     if (item >= TRACKING_ENABLED && item <= TRACKING_VERIFY) {
       const char* labels[] = {"Enabled", "Channel", "Interval", "GPS state", "Report now", "Check channel"};
-      display.print(labels[item - TRACKING_ENABLED]);
-      display.setCursor(valCol(display), y);
       char value[40]; value[0] = 0;
       if (item == TRACKING_ENABLED) strcpy(value, p && p->gps_enabled ? "ON" : "OFF");
       if (item == TRACKING_CHANNEL) {
@@ -643,8 +641,13 @@ private:
       }
       if (item == TRACKING_INTERVAL) snprintf(value, sizeof(value), "%lu sec", (unsigned long)the_mesh.trackingInterval());
       if (item == TRACKING_GPS) strcpy(value, the_mesh.trackingAcquiring() ? "Acquiring" : "Asleep");
-      display.print(value);
-      return 0;
+      const char* label = labels[item - TRACKING_ENABLED];
+      if (value[0]) {
+        val(label, value);
+      } else {
+        display.drawTextEllipsized(2, y, display.width() - _reserve - 4, label);
+      }
+      return mq;
     }
 #endif
     if (item >= SCHEMA_ITEM) {

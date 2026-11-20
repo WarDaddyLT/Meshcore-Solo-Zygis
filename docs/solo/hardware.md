@@ -230,3 +230,11 @@ PlatformIO build directory and run `scripts/zygis_kit_menus.py --help` with
 the PlatformIO Python. The bench run exercises navigation and writes screen
 captures and a result log. The optional second USB radio verifies the unread
 badge with a real LoRa message. Restore the standard firmware after the run.
+
+The manual Žygis release workflow runs tracking regressions and checks the
+packaged images for every target. Each artifact includes a JSON test report.
+For a physical release check, use
+`scripts/zygis_release_tests.py ENV --usb DEVICE_SERIAL PEER_SERIAL VERSION`
+with the matching bench firmware installed. The Wio bench uses the existing
+hardware test tool and needs pyserial and Pillow. Restore the production
+firmware after the bench run.

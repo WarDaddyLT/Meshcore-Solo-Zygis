@@ -73,9 +73,9 @@ def smoke(kit_serial, peer_serial, *, on_kit_message=None):
         for sender, receiver in ((peer, kit), (kit, peer)):
             message = f"Žygis kit test {nonce}"
             sender.send(message)
-            wait_message(receiver, sender, lambda body: body == message, "exact UTF-8 channel message")
             if receiver is kit and on_kit_message is not None:
                 on_kit_message(kit, True)
+            wait_message(receiver, sender, lambda body: body == message, "exact UTF-8 channel message")
         print("PASS two-way exact UTF-8 channel messaging", flush=True)
 
         exchange(peer, kit, "!power", lambda body: body.startswith("Power saving "))

@@ -227,8 +227,11 @@ def main():
                 before = kit.screenshot("lock-before-message")
             else:
                 kit.expect("kit/lock")
-                after = kit.screenshot("lock-after-message")
-                check(after != before, "Unread badge area did not change after a real LoRa message")
+                deadline = time.monotonic() + 15
+                while kit.screenshot("lock-after-message") == before:
+                    check(time.monotonic() < deadline,
+                          "Unread badge area did not change after a real LoRa message")
+                    time.sleep(0.35)
                 print("PASS locked unread badge updates after a LoRa message", flush=True)
 
         try:

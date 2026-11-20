@@ -34,11 +34,10 @@ jobs:
         env:
           TARGET: ${{ matrix.environment }}
         run: python3 scripts/zygis_release.py "$TARGET" --output out/release
-      - name: Validate multiplayer and tracking priority
-        if: matrix.environment == 'WioTrackerL1_zygis_arena'
-        run: |
-          python3 test/multiplayer/test_multiplayer.py
-          python3 test/tracking/test_game_priority.py
+      - name: Run tracking and artifact tests for this target
+        env:
+          TARGET: ${{ matrix.environment }}
+        run: python3 scripts/zygis_release_tests.py "$TARGET" --output out/release
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.environment }}
