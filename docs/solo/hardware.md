@@ -191,8 +191,9 @@ target keeps the Solo T-Echo Lite application and ExtraFS boundaries. The
 updater checks the connected board identity before performing an application
 update and compares the identity, radio settings and channel slots after reboot.
 
-The e-paper splash places the Žygis emblem to the left of the wordmark.
-The underlined WarDaddy credit sits above the live startup progress bar. At Ready, press a key to enter the carousel. The carousel uses the
+The e-paper splash places the Žygis emblem beside the Žygis wordmark and
+MeshCore Solo subtitle. A horizontal rule separates that artwork from the
+WarDaddy credit above the live startup progress bar. At Ready, press a key to enter the carousel. The carousel uses the
 AIDAS9 32×32 side and 48×48 center icon assets or matching Font Awesome Free
 bitmaps along with the Žygis status row and menu destinations. Up and Down move
 through the carousel. Center selects, Esc goes back, and Home opens the
