@@ -1,0 +1,88 @@
+{
+  "file": "zygis-logo-mipmaps.bin",
+  "format": "packed1",
+  "layout": "row-major, top-left origin, MSB first, zero pad at row ends",
+  "bits": {
+    "0": "background",
+    "1": "foreground"
+  },
+  "levels": [
+    {
+      "width": 1254,
+      "height": 1254,
+      "stride_bytes": 157,
+      "offset": 0,
+      "length": 196878
+    },
+    {
+      "width": 627,
+      "height": 627,
+      "stride_bytes": 79,
+      "offset": 196878,
+      "length": 49533
+    },
+    {
+      "width": 313,
+      "height": 313,
+      "stride_bytes": 40,
+      "offset": 246411,
+      "length": 12520
+    },
+    {
+      "width": 156,
+      "height": 156,
+      "stride_bytes": 20,
+      "offset": 258931,
+      "length": 3120
+    },
+    {
+      "width": 78,
+      "height": 78,
+      "stride_bytes": 10,
+      "offset": 262051,
+      "length": 780
+    },
+    {
+      "width": 39,
+      "height": 39,
+      "stride_bytes": 5,
+      "offset": 262831,
+      "length": 195
+    },
+    {
+      "width": 19,
+      "height": 19,
+      "stride_bytes": 3,
+      "offset": 263026,
+      "length": 57
+    },
+    {
+      "width": 9,
+      "height": 9,
+      "stride_bytes": 2,
+      "offset": 263083,
+      "length": 18
+    },
+    {
+      "width": 4,
+      "height": 4,
+      "stride_bytes": 1,
+      "offset": 263101,
+      "length": 4
+    },
+    {
+      "width": 2,
+      "height": 2,
+      "stride_bytes": 1,
+      "offset": 263105,
+      "length": 2
+    },
+    {
+      "width": 1,
+      "height": 1,
+      "stride_bytes": 1,
+      "offset": 263107,
+      "length": 1
+    }
+  ]
+}
